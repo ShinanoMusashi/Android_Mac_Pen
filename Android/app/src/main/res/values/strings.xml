@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Tablet Pen</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_connected">Connected</string>
+    <string name="hint_ip_address">Mac IP Address</string>
+    <string name="hint_port">Port</string>
+    <string name="pen_area">Pen Input Area</string>
+    <string name="touch_here">Touch here with your pen</string>
+    <string name="settings">Settings</string>
+    <string name="sensitivity_label">Cursor Sensitivity</string>
+    <string name="connection">Connection</string>
+
+    <!-- Home screen -->
+    <string name="select_mode">Select a mode</string>
+    <string name="mode_touchpad_title">Touchpad Mode</string>
+    <string name="mode_touchpad_desc">Use your tablet as a trackpad to control your Mac cursor</string>
+    <string name="mode_mirror_title">Screen Mirror Mode</string>
+    <string name="mode_mirror_desc">Mirror your Mac screen and control it with your pen</string>
+    <string name="mirror_placeholder">Connect to Mac to start screen mirroring</string>
+</resources>

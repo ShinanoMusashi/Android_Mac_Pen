@@ -1,0 +1,230 @@
+package com.example.tabletpen.mirror
+
+import com.example.tabletpen.PenData
+import com.example.tabletpen.protocol.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.consumeEach
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.net.InetSocketAddress
+import java.net.Socket
+
+/**
+ * Client for screen mirror mode.
+ * Handles bidirectional communication: sends pen data, receives video frames.
+ */
+class MirrorClient {
+    private var socket: Socket? = null
+    private var inputStream: DataInputStream? = null
+    private var outputStream: DataOutputStream? = null
+
+    private var receiveJob: Job? = null
+    private var sendJob: Job? = null
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    // Channel for outgoing messages (CONFLATED = keep only latest pen data)
+    private val sendChannel = Channel<OutgoingMessage>(Channel.CONFLATED)
+
+    private sealed class OutgoingMessage {
+        data class PenDataMsg(val data: PenData) : OutgoingMessage()
+        data class ModeRequestMsg(val mode: AppMode) : OutgoingMessage()
+    }
+
+    @Volatile
+    var isConnected = false
+        private set
+
+    // Callbacks
+    var onVideoConfig: ((VideoConfig) -> Unit)? = null
+    var onVideoFrame: ((VideoFrame) -> Unit)? = null
+    var onConnectionChanged: ((Boolean) -> Unit)? = null
+    var onError: ((String) -> Unit)? = null
+    var onModeAck: ((AppMode) -> Unit)? = null
+
+    /**
+     * Connect to the Mac server.
+     */
+    suspend fun connect(host: String, port: Int): Boolean = withContext(Dispatchers.IO) {
+        try {
+            disconnect()
+
+            val newSocket = Socket()
+            newSocket.tcpNoDelay = true
+            newSocket.soTimeout = 0 // No read timeout (we handle blocking reads)
+            newSocket.connect(InetSocketAddress(host, port), 5000)
+
+            socket = newSocket
+            inputStream = DataInputStream(newSocket.getInputStream())
+            outputStream = DataOutputStream(newSocket.getOutputStream())
+            isConnected = true
+
+            // Start receive and send loops
+            startReceiveLoop()
+            startSendLoop()
+
+            withContext(Dispatchers.Main) {
+                onConnectionChanged?.invoke(true)
+            }
+
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            withContext(Dispatchers.Main) {
+                onError?.invoke("Connection failed: ${e.message}")
+            }
+            false
+        }
+    }
+
+    /**
+     * Disconnect from the server.
+     */
+    fun disconnect() {
+        isConnected = false
+
+        receiveJob?.cancel()
+        receiveJob = null
+        sendJob?.cancel()
+        sendJob = null
+
+        try {
+            socket?.close()
+        } catch (e: Exception) {
+            // Ignore
+        }
+
+        socket = null
+        inputStream = null
+        outputStream = null
+
+        onConnectionChanged?.invoke(false)
+    }
+
+    /**
+     * Request screen mirror mode from server.
+     */
+    fun requestMirrorMode() {
+        sendModeRequest(AppMode.SCREEN_MIRROR)
+    }
+
+    /**
+     * Request touchpad mode from server.
+     */
+    fun requestTouchpadMode() {
+        sendModeRequest(AppMode.TOUCHPAD)
+    }
+
+    private fun sendModeRequest(mode: AppMode) {
+        if (!isConnected) return
+        scope.launch {
+            sendChannel.send(OutgoingMessage.ModeRequestMsg(mode))
+        }
+    }
+
+    /**
+     * Send pen data to the server.
+     */
+    fun sendPenData(penData: PenData) {
+        if (!isConnected) return
+        // Use trySend to avoid blocking - if channel is full, latest data replaces old
+        sendChannel.trySend(OutgoingMessage.PenDataMsg(penData))
+    }
+
+    private fun startSendLoop() {
+        sendJob = scope.launch {
+            try {
+                for (message in sendChannel) {
+                    if (!isConnected) break
+                    val output = outputStream ?: break
+
+                    when (message) {
+                        is OutgoingMessage.PenDataMsg -> {
+                            ProtocolCodec.writePenData(output, message.data.serialize())
+                        }
+                        is OutgoingMessage.ModeRequestMsg -> {
+                            ProtocolCodec.writeModeRequest(output, message.mode)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (isConnected) {
+                    handleDisconnect("Send error: ${e.message}")
+                }
+            }
+        }
+    }
+
+    private fun startReceiveLoop() {
+        receiveJob = scope.launch {
+            try {
+                while (isActive && isConnected) {
+                    val input = inputStream ?: break
+                    val message = ProtocolCodec.readMessage(input) ?: break
+
+                    handleMessage(message)
+                }
+            } catch (e: Exception) {
+                if (isActive) {
+                    handleDisconnect("Receive error: ${e.message}")
+                }
+            }
+        }
+    }
+
+    private suspend fun handleMessage(message: ProtocolMessage) {
+        when (message.type) {
+            MessageType.VIDEO_CONFIG -> {
+                ProtocolCodec.parseVideoConfig(message.payload)?.let { config ->
+                    withContext(Dispatchers.Main) {
+                        onVideoConfig?.invoke(config)
+                    }
+                }
+            }
+
+            MessageType.VIDEO_FRAME -> {
+                ProtocolCodec.parseVideoFrame(message.payload)?.let { frame ->
+                    // Don't switch to Main thread for frames (performance)
+                    onVideoFrame?.invoke(frame)
+                }
+            }
+
+            MessageType.MODE_ACK -> {
+                val mode = if (message.payload.isNotEmpty()) {
+                    AppMode.fromValue(message.payload[0]) ?: AppMode.TOUCHPAD
+                } else {
+                    AppMode.TOUCHPAD
+                }
+                withContext(Dispatchers.Main) {
+                    onModeAck?.invoke(mode)
+                }
+            }
+
+            MessageType.PONG -> {
+                // Ping response, ignore
+            }
+
+            else -> {
+                // Unknown message type
+            }
+        }
+    }
+
+    private fun handleDisconnect(reason: String) {
+        if (isConnected) {
+            isConnected = false
+            scope.launch(Dispatchers.Main) {
+                onError?.invoke(reason)
+                onConnectionChanged?.invoke(false)
+            }
+        }
+    }
+
+    /**
+     * Clean up resources.
+     */
+    fun release() {
+        disconnect()
+        scope.cancel()
+    }
+}

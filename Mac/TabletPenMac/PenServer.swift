@@ -1,0 +1,267 @@
+import Foundation
+import Network
+
+/// TCP server that receives pen data from the Android tablet.
+/// Supports both legacy text protocol and new binary protocol.
+class PenServer {
+    private var listener: NWListener?
+    private var connection: NWConnection?
+    private let port: UInt16
+    private let queue = DispatchQueue(label: "PenServer")
+
+    // Buffer for accumulating incoming data (for binary protocol parsing)
+    private var receiveBuffer = Data()
+
+    // Current mode
+    private(set) var currentMode: AppMode = .touchpad
+
+    // Protocol detection: true = binary, false = legacy text
+    private var useBinaryProtocol = false
+
+    // Callbacks
+    var onPenData: ((PenData) -> Void)?
+    var onClientConnected: ((String) -> Void)?
+    var onClientDisconnected: (() -> Void)?
+    var onError: ((String) -> Void)?
+    var onModeRequest: ((AppMode) -> Void)?
+
+    init(port: UInt16 = 9876) {
+        self.port = port
+    }
+
+    /// Start listening for connections.
+    func start() {
+        do {
+            let parameters = NWParameters.tcp
+            parameters.allowLocalEndpointReuse = true
+
+            listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
+
+            listener?.stateUpdateHandler = { [weak self] state in
+                switch state {
+                case .ready:
+                    print("Server listening on port \(self?.port ?? 0)")
+                case .failed(let error):
+                    self?.onError?("Server failed: \(error)")
+                case .cancelled:
+                    print("Server cancelled")
+                default:
+                    break
+                }
+            }
+
+            listener?.newConnectionHandler = { [weak self] newConnection in
+                self?.handleNewConnection(newConnection)
+            }
+
+            listener?.start(queue: queue)
+        } catch {
+            onError?("Failed to start server: \(error)")
+        }
+    }
+
+    /// Stop the server.
+    func stop() {
+        connection?.cancel()
+        listener?.cancel()
+        connection = nil
+        listener = nil
+    }
+
+    private func handleNewConnection(_ newConnection: NWConnection) {
+        // Close existing connection if any
+        connection?.cancel()
+        connection = newConnection
+
+        // Reset state for new connection
+        receiveBuffer = Data()
+        useBinaryProtocol = false
+        currentMode = .touchpad
+
+        let endpoint = newConnection.endpoint
+        if case .hostPort(let host, _) = endpoint {
+            DispatchQueue.main.async {
+                self.onClientConnected?("\(host)")
+            }
+        }
+
+        newConnection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                self?.receiveData()
+            case .failed(let error):
+                DispatchQueue.main.async {
+                    self?.onError?("Connection failed: \(error)")
+                    self?.onClientDisconnected?()
+                }
+            case .cancelled:
+                DispatchQueue.main.async {
+                    self?.onClientDisconnected?()
+                }
+            default:
+                break
+            }
+        }
+
+        newConnection.start(queue: queue)
+    }
+
+    private func receiveData() {
+        connection?.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, isComplete, error in
+            guard let self = self else { return }
+
+            if let error = error {
+                DispatchQueue.main.async {
+                    self.onError?("Receive error: \(error)")
+                }
+                return
+            }
+
+            if let data = data, !data.isEmpty {
+                self.receiveBuffer.append(data)
+                self.processReceivedData()
+            }
+
+            if isComplete {
+                DispatchQueue.main.async {
+                    self.onClientDisconnected?()
+                }
+            } else {
+                // Continue receiving
+                self.receiveData()
+            }
+        }
+    }
+
+    private func processReceivedData() {
+        // Detect protocol type on first data
+        if !useBinaryProtocol && receiveBuffer.count > 0 {
+            // Check if first byte looks like a valid binary message type
+            let firstByte = receiveBuffer[0]
+            if let _ = MessageType(rawValue: firstByte) {
+                useBinaryProtocol = true
+                print("Using binary protocol")
+            } else {
+                // Assume legacy text protocol
+                print("Using legacy text protocol")
+            }
+        }
+
+        if useBinaryProtocol {
+            processBinaryProtocol()
+        } else {
+            processLegacyTextProtocol()
+        }
+    }
+
+    private func processBinaryProtocol() {
+        // Keep parsing messages while we have enough data
+        while receiveBuffer.count >= 5 {
+            guard let (message, consumed) = ProtocolMessage.parse(from: receiveBuffer) else {
+                // Not enough data yet or invalid message
+                break
+            }
+
+            // Remove consumed bytes from buffer
+            receiveBuffer.removeFirst(consumed)
+
+            // Handle the message
+            handleMessage(message)
+        }
+    }
+
+    private func handleMessage(_ message: ProtocolMessage) {
+        switch message.type {
+        case .penData:
+            if let penData = ProtocolCodec.decodePenData(from: message.payload) {
+                DispatchQueue.main.async {
+                    self.onPenData?(penData)
+                }
+            }
+
+        case .modeRequest:
+            if let mode = ProtocolCodec.decodeMode(from: message.payload) {
+                currentMode = mode
+                DispatchQueue.main.async {
+                    self.onModeRequest?(mode)
+                }
+                // Send acknowledgment
+                sendModeAck(mode)
+            }
+
+        case .ping:
+            // Respond with pong
+            sendPong()
+
+        default:
+            // Ignore other message types from client
+            break
+        }
+    }
+
+    private func processLegacyTextProtocol() {
+        // Handle legacy text protocol (CSV pen data)
+        guard let string = String(data: receiveBuffer, encoding: .utf8) else { return }
+
+        // Find complete lines
+        let lines = string.split(separator: "\n", omittingEmptySubsequences: false)
+
+        // Process all complete lines (all but the last if it doesn't end with newline)
+        let hasTrailingNewline = string.hasSuffix("\n")
+        let completeLineCount = hasTrailingNewline ? lines.count : lines.count - 1
+
+        for i in 0..<completeLineCount {
+            let line = String(lines[i])
+            if !line.isEmpty, let penData = PenData.parse(from: line) {
+                DispatchQueue.main.async {
+                    self.onPenData?(penData)
+                }
+            }
+        }
+
+        // Keep incomplete line in buffer
+        if hasTrailingNewline {
+            receiveBuffer = Data()
+        } else if completeLineCount > 0 {
+            let remaining = String(lines[completeLineCount])
+            receiveBuffer = remaining.data(using: .utf8) ?? Data()
+        }
+    }
+
+    // MARK: - Send Methods
+
+    /// Send mode acknowledgment.
+    func sendModeAck(_ mode: AppMode) {
+        let data = ProtocolCodec.encodeModeAck(mode)
+        send(data)
+    }
+
+    /// Send pong response.
+    func sendPong() {
+        let data = ProtocolCodec.encodePong()
+        send(data)
+    }
+
+    /// Send video configuration.
+    func sendVideoConfig(width: Int, height: Int, fps: Int, bitrate: Int) {
+        let data = ProtocolCodec.encodeVideoConfig(width: width, height: height, fps: fps, bitrate: bitrate)
+        send(data)
+    }
+
+    /// Send video frame.
+    func sendVideoFrame(frameType: FrameType, timestamp: UInt64, frameNumber: UInt32, nalData: Data) {
+        let data = ProtocolCodec.encodeVideoFrame(frameType: frameType, timestamp: timestamp, frameNumber: frameNumber, nalData: nalData)
+        send(data)
+    }
+
+    /// Send raw data to client.
+    private func send(_ data: Data) {
+        connection?.send(content: data, completion: .contentProcessed { [weak self] error in
+            if let error = error {
+                DispatchQueue.main.async {
+                    self?.onError?("Send error: \(error)")
+                }
+            }
+        })
+    }
+}

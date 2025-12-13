@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/homeFragment">
+
+    <fragment
+        android:id="@+id/homeFragment"
+        android:name="com.example.tabletpen.ui.HomeFragment"
+        android:label="Home"
+        tools:layout="@layout/fragment_home">
+
+        <action
+            android:id="@+id/action_home_to_touchpad"
+            app:destination="@id/touchpadFragment" />
+
+        <action
+            android:id="@+id/action_home_to_mirror"
+            app:destination="@id/mirrorFragment" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/touchpadFragment"
+        android:name="com.example.tabletpen.ui.TouchpadFragment"
+        android:label="Touchpad"
+        tools:layout="@layout/fragment_touchpad" />
+
+    <fragment
+        android:id="@+id/mirrorFragment"
+        android:name="com.example.tabletpen.ui.MirrorFragment"
+        android:label="Screen Mirror"
+        tools:layout="@layout/fragment_mirror" />
+
+</navigation>

@@ -1,0 +1,22 @@
+# Android
+Android/.gradle/
+Android/.idea/
+Android/build/
+Android/app/build/
+Android/local.properties
+Android/*.iml
+Android/captures/
+Android/.externalNativeBuild/
+Android/.cxx/
+
+# Mac/Swift
+Mac/.build/
+Mac/.idea/
+Mac/.swiftpm/
+Mac/*.xcodeproj/
+Mac/*.xcworkspace/
+Mac/DerivedData/
+
+# General
+.DS_Store
+*.log

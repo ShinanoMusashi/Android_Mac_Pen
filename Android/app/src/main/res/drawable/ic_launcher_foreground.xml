@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Stylus pen icon -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M70,25 L83,38 L43,78 L30,65 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M85,36 L90,31 C93,28 93,23 90,20 L88,18 C85,15 80,15 77,18 L72,23 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M28,67 L41,80 L25,88 Z" />
+</vector>
