@@ -84,6 +84,15 @@ object ProtocolCodec {
     }
 
     /**
+     * Write log data message.
+     * Format: filename + newline + file content
+     */
+    fun writeLogData(output: DataOutputStream, filename: String, content: String) {
+        val payload = "$filename\n$content".toByteArray(Charsets.UTF_8)
+        writeMessage(output, MessageType.LOG_DATA, payload)
+    }
+
+    /**
      * Read a message from the input stream.
      * Returns null if stream is closed or error occurs.
      */

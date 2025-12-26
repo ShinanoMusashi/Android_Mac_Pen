@@ -72,6 +72,10 @@ class PerformanceStats(private val context: Context? = null) {
     // Detailed pipeline timing
     private var pipelineLogWriter: FileWriter? = null
     private var pipelineLoggingEnabled = false
+    private var pipelineLogFile: File? = null
+
+    // Callback for when log is ready to send
+    var onPipelineLogReady: ((filename: String, content: String) -> Unit)? = null
 
     // Per-frame timing data
     data class FrameTiming(
@@ -296,6 +300,7 @@ class PerformanceStats(private val context: Context? = null) {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val dir = context?.getExternalFilesDir(null) ?: return
             val file = File(dir, "pipeline_timing_$timestamp.csv")
+            pipelineLogFile = file
             pipelineLogWriter = FileWriter(file, true)
             pipelineLogWriter?.write("frame,net_to_queue_ms,queue_wait_ms,decode_ms,decode_to_render_ms,total_ms,nal_size,keyframe\n")
             pipelineLoggingEnabled = true
@@ -307,6 +312,7 @@ class PerformanceStats(private val context: Context? = null) {
 
     /**
      * Stop pipeline logging and print summary.
+     * Optionally sends the log file content to Mac via callback.
      */
     fun stopPipelineLogging() {
         if (pipelineLoggingEnabled) {
@@ -319,6 +325,19 @@ class PerformanceStats(private val context: Context? = null) {
             e.printStackTrace()
         }
         pipelineLogWriter = null
+
+        // Read the log file and send to Mac
+        val logFile = pipelineLogFile
+        if (logFile != null && logFile.exists()) {
+            try {
+                val content = logFile.readText()
+                onPipelineLogReady?.invoke(logFile.name, content)
+                android.util.Log.i("PerformanceStats", "Sending log file: ${logFile.name} (${content.length} bytes)")
+            } catch (e: Exception) {
+                android.util.Log.e("PerformanceStats", "Failed to read log file: ${e.message}")
+            }
+        }
+        pipelineLogFile = null
     }
 
     /**

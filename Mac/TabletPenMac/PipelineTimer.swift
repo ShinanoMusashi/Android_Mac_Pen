@@ -18,10 +18,18 @@ class PipelineTimer {
     private var frameCount: Int = 0
     private let statsInterval = 60 // Log summary every N frames
 
+    // Real-time stats (updated every frame, printed every second)
+    private var lastPrintTime: UInt64 = 0
+    private var recentCaptureToEncode: Double = 0
+    private var recentEncodeTime: Double = 0
+    private var recentEncodeToSend: Double = 0
+    private var recentTotal: Double = 0
+    private var recentFrameCount: Int = 0
+
     // Per-frame timing
     struct FrameTiming {
         let frameNumber: UInt32
-        var captureTime: UInt64 = 0      // When frame was captured (ns)
+        var captureTime: UInt64 = 0      // When frame was captured (ns) - using mach_absolute_time
         var encodeStartTime: UInt64 = 0  // When encoding started (ns)
         var encodeEndTime: UInt64 = 0    // When encoding completed (ns)
         var sendTime: UInt64 = 0         // When sent to network (ns)
@@ -31,7 +39,12 @@ class PipelineTimer {
 
     private var currentFrame: FrameTiming?
 
-    private init() {}
+    // Cache timebase info for performance
+    private var timebaseInfo = mach_timebase_info_data_t()
+
+    private init() {
+        mach_timebase_info(&timebaseInfo)
+    }
 
     func start(logToFile: Bool = false) {
         enabled = true
@@ -65,12 +78,14 @@ class PipelineTimer {
     // MARK: - Timing Points
 
     /// Called when screen capture produces a frame
+    /// Note: We use mach_absolute_time() instead of displayTime for consistent timing
     func onCapture(frameNumber: UInt32, displayTime: UInt64) {
         guard enabled else { return }
+        let captureTime = now()  // Use consistent time source
         queue.async {
             self.currentFrame = FrameTiming(
                 frameNumber: frameNumber,
-                captureTime: displayTime
+                captureTime: captureTime
             )
         }
     }
@@ -78,9 +93,10 @@ class PipelineTimer {
     /// Called when encoder starts processing
     func onEncodeStart(frameNumber: UInt32) {
         guard enabled else { return }
+        let time = now()
         queue.async {
             if self.currentFrame?.frameNumber == frameNumber {
-                self.currentFrame?.encodeStartTime = Self.now()
+                self.currentFrame?.encodeStartTime = time
             }
         }
     }
@@ -88,9 +104,10 @@ class PipelineTimer {
     /// Called when encoder completes
     func onEncodeComplete(frameNumber: UInt32, nalSize: Int, isKeyframe: Bool) {
         guard enabled else { return }
+        let time = now()
         queue.async {
             if self.currentFrame?.frameNumber == frameNumber {
-                self.currentFrame?.encodeEndTime = Self.now()
+                self.currentFrame?.encodeEndTime = time
                 self.currentFrame?.nalSize = nalSize
                 self.currentFrame?.isKeyframe = isKeyframe
             }
@@ -100,9 +117,10 @@ class PipelineTimer {
     /// Called when data is sent to network
     func onSend(frameNumber: UInt32) {
         guard enabled else { return }
+        let time = now()
         queue.async {
             guard var frame = self.currentFrame, frame.frameNumber == frameNumber else { return }
-            frame.sendTime = Self.now()
+            frame.sendTime = time
             self.logFrame(frame)
             self.currentFrame = nil
         }
@@ -117,7 +135,7 @@ class PipelineTimer {
         let encodeEndMs = Double(frame.encodeEndTime) / 1_000_000.0
         let sendMs = Double(frame.sendTime) / 1_000_000.0
 
-        // Time differences (using encode start as reference since capture time may be in different epoch)
+        // Time differences
         let captureToEncode = encodeStartMs - captureMs
         let encodeTime = encodeEndMs - encodeStartMs
         let encodeToSend = sendMs - encodeEndMs
@@ -132,6 +150,13 @@ class PipelineTimer {
             encodeToSendSum += encodeToSend
             totalSum += total
             frameCount += 1
+
+            // Update recent stats for real-time display
+            recentCaptureToEncode += captureToEncode
+            recentEncodeTime += encodeTime
+            recentEncodeToSend += encodeToSend
+            recentTotal += total
+            recentFrameCount += 1
         }
 
         // Log to file
@@ -145,10 +170,36 @@ class PipelineTimer {
             file.write(line.data(using: .utf8)!)
         }
 
-        // Print summary periodically
+        // Print real-time stats every second
+        let currentTime = now()
+        let timeSinceLastPrint = Double(currentTime - lastPrintTime) / 1_000_000_000.0  // Convert to seconds
+        if timeSinceLastPrint >= 1.0 && recentFrameCount > 0 {
+            printRealTimeStats()
+            lastPrintTime = currentTime
+            recentCaptureToEncode = 0
+            recentEncodeTime = 0
+            recentEncodeToSend = 0
+            recentTotal = 0
+            recentFrameCount = 0
+        }
+
+        // Print full summary periodically
         if frameCount > 0 && frameCount % statsInterval == 0 {
             printSummary()
         }
+    }
+
+    private func printRealTimeStats() {
+        guard recentFrameCount > 0 else { return }
+
+        let avgCaptureToEncode = recentCaptureToEncode / Double(recentFrameCount)
+        let avgEncodeTime = recentEncodeTime / Double(recentFrameCount)
+        let avgEncodeToSend = recentEncodeToSend / Double(recentFrameCount)
+        let avgTotal = recentTotal / Double(recentFrameCount)
+
+        // Single line real-time output
+        print(String(format: "🖥️  Mac: Cap→Enc: %.1fms | Enc: %.1fms | Enc→Send: %.1fms | Total: %.1fms (%d fps)",
+                     avgCaptureToEncode, avgEncodeTime, avgEncodeToSend, avgTotal, recentFrameCount))
     }
 
     private func printSummary() {
@@ -175,10 +226,8 @@ class PipelineTimer {
 
     // MARK: - Utility
 
-    private static func now() -> UInt64 {
-        var time = mach_timebase_info_data_t()
-        mach_timebase_info(&time)
+    private func now() -> UInt64 {
         let machTime = mach_absolute_time()
-        return machTime * UInt64(time.numer) / UInt64(time.denom)
+        return machTime * UInt64(timebaseInfo.numer) / UInt64(timebaseInfo.denom)
     }
 }

@@ -10,6 +10,7 @@ enum MessageType: UInt8 {
     case modeRequest = 0x02
     case qualityRequest = 0x04  // Request quality/bitrate settings
     case roiUpdate = 0x05       // Region of interest update for zoomed streaming
+    case logData = 0x06         // Log file transfer from Android to Mac
 
     // Mac -> Android
     case modeAck = 0x03

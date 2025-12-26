@@ -30,6 +30,7 @@ class MirrorClient {
         data class ModeRequestMsg(val mode: AppMode) : OutgoingMessage()
         data class QualityRequestMsg(val bitrateMbps: Int) : OutgoingMessage()
         data class ROIUpdateMsg(val x: Float, val y: Float, val width: Float, val height: Float) : OutgoingMessage()
+        data class LogDataMsg(val filename: String, val content: String) : OutgoingMessage()
         object PingMsg : OutgoingMessage()
     }
 
@@ -156,6 +157,16 @@ class MirrorClient {
         sendChannel.trySend(OutgoingMessage.ROIUpdateMsg(x, y, width, height))
     }
 
+    /**
+     * Send log data to Mac for saving.
+     */
+    fun sendLogData(filename: String, content: String) {
+        if (!isConnected) return
+        scope.launch {
+            sendChannel.send(OutgoingMessage.LogDataMsg(filename, content))
+        }
+    }
+
     private fun sendModeRequest(mode: AppMode) {
         if (!isConnected) return
         scope.launch {
@@ -202,6 +213,9 @@ class MirrorClient {
                         }
                         is OutgoingMessage.ROIUpdateMsg -> {
                             ProtocolCodec.writeROIUpdate(output, message.x, message.y, message.width, message.height)
+                        }
+                        is OutgoingMessage.LogDataMsg -> {
+                            ProtocolCodec.writeLogData(output, message.filename, message.content)
                         }
                         is OutgoingMessage.PingMsg -> {
                             lastPingTime = System.currentTimeMillis()

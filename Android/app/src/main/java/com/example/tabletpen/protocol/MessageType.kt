@@ -12,6 +12,7 @@ enum class MessageType(val value: Byte) {
     MODE_REQUEST(0x02),
     QUALITY_REQUEST(0x04),  // Request quality preset (bitrate in Mbps as payload)
     ROI_UPDATE(0x05),       // Region of interest for zoomed streaming
+    LOG_DATA(0x06),         // Log file transfer from Android to Mac
 
     // Mac -> Android
     MODE_ACK(0x03),

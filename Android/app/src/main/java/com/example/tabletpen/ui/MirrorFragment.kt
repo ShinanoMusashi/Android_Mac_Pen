@@ -219,6 +219,11 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
         // Wire up stats to client for network receive timing
         mirrorClient.stats = performanceStats
 
+        // Wire up log transfer callback - sends log to Mac when stopped
+        performanceStats?.onPipelineLogReady = { filename, content ->
+            mirrorClient.sendLogData(filename, content)
+        }
+
         // Stats toggle button
         binding.statsToggleButton.setOnClickListener {
             statsVisible = !statsVisible

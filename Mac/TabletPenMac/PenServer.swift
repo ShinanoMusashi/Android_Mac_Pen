@@ -211,9 +211,42 @@ class PenServer {
                 }
             }
 
+        case .logData:
+            // Save received log data to file
+            saveLogData(message.payload)
+
         default:
             // Ignore other message types from client
             break
+        }
+    }
+
+    /// Save log data received from Android to a file.
+    private func saveLogData(_ data: Data) {
+        // Extract filename (first line) and content (rest)
+        guard let string = String(data: data, encoding: .utf8) else {
+            print("Failed to decode log data")
+            return
+        }
+
+        let lines = string.components(separatedBy: "\n")
+        guard lines.count >= 2 else {
+            print("Invalid log data format")
+            return
+        }
+
+        let filename = lines[0]
+        let content = lines.dropFirst().joined(separator: "\n")
+
+        // Save to Documents folder
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let filePath = documentsPath.appendingPathComponent("android_\(filename)")
+
+        do {
+            try content.write(to: filePath, atomically: true, encoding: .utf8)
+            print("📱 Android log saved: \(filePath.path)")
+        } catch {
+            print("Failed to save log: \(error)")
         }
     }
 
