@@ -89,10 +89,11 @@ class ScreenCapture {
         let displayID = mainDisplayID
 
         // Configure the display stream
+        // queueDepth: 1 for lowest latency (was 3, saves ~32ms but may cause occasional frame drops)
         let properties: [CFString: Any] = [
             CGDisplayStream.minimumFrameTime: 1.0 / Double(fps),
             CGDisplayStream.showCursor: true,
-            CGDisplayStream.queueDepth: 3,
+            CGDisplayStream.queueDepth: 1,
         ] as [CFString: Any]
 
         // Create the display stream
