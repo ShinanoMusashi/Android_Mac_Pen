@@ -8,6 +8,8 @@ enum MessageType: UInt8 {
     // Android -> Mac
     case penData = 0x01
     case modeRequest = 0x02
+    case qualityRequest = 0x04  // Request quality/bitrate settings
+    case roiUpdate = 0x05       // Region of interest update for zoomed streaming
 
     // Mac -> Android
     case modeAck = 0x03
@@ -29,6 +31,20 @@ enum AppMode: UInt8 {
 enum FrameType: UInt8 {
     case keyframe = 0x00    // I-frame
     case deltaFrame = 0x01  // P-frame
+}
+
+/// Region of Interest for cropped streaming.
+/// All values are normalized (0.0 to 1.0) relative to screen size.
+struct RegionOfInterest {
+    let x: Float      // Left position (0.0 = left edge)
+    let y: Float      // Top position (0.0 = top edge)
+    let width: Float  // Width of region
+    let height: Float // Height of region
+
+    /// Check if this is the full screen (no crop needed)
+    var isFullScreen: Bool {
+        return x <= 0.001 && y <= 0.001 && width >= 0.999 && height >= 0.999
+    }
 }
 
 /// Represents a protocol message.
@@ -163,5 +179,37 @@ class ProtocolCodec {
     static func decodeMode(from payload: Data) -> AppMode? {
         guard payload.count >= 1 else { return nil }
         return AppMode(rawValue: payload[payload.startIndex])
+    }
+
+    /// Parse quality request from payload.
+    /// Returns bitrate in Mbps.
+    static func decodeQualityRequest(from payload: Data) -> Int? {
+        guard payload.count >= 4 else { return nil }
+        let bytes = Array(payload.prefix(4))
+        let bitrateMbps = Int(UInt32(bytes[0]) << 24 | UInt32(bytes[1]) << 16 | UInt32(bytes[2]) << 8 | UInt32(bytes[3]))
+        return bitrateMbps
+    }
+
+    /// Parse ROI update from payload.
+    /// Payload format: [x: 4 bytes float BE][y: 4 bytes][width: 4 bytes][height: 4 bytes]
+    static func decodeROI(from payload: Data) -> RegionOfInterest? {
+        guard payload.count >= 16 else { return nil }
+        let bytes = Array(payload)
+
+        // Parse floats from big-endian bytes
+        func parseFloat(at offset: Int) -> Float {
+            let bits = UInt32(bytes[offset]) << 24 |
+                       UInt32(bytes[offset + 1]) << 16 |
+                       UInt32(bytes[offset + 2]) << 8 |
+                       UInt32(bytes[offset + 3])
+            return Float(bitPattern: bits)
+        }
+
+        let x = parseFloat(at: 0)
+        let y = parseFloat(at: 4)
+        let width = parseFloat(at: 8)
+        let height = parseFloat(at: 12)
+
+        return RegionOfInterest(x: x, y: y, width: width, height: height)
     }
 }

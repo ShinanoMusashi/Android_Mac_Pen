@@ -3,7 +3,7 @@ import CoreGraphics
 import AppKit
 
 /// Controls the Mac cursor based on pen input data.
-/// Uses relative positioning like a trackpad.
+/// Supports both relative (touchpad) and absolute (mirror) positioning modes.
 class CursorController {
     private var lastButtonState = false
     private var isMouseDown = false
@@ -16,6 +16,15 @@ class CursorController {
     // Movement smoothing - accumulated small movements
     private var accumulatedDeltaX: Float = 0
     private var accumulatedDeltaY: Float = 0
+
+    /// Positioning mode
+    enum PositioningMode {
+        case relative  // Like a touchpad - movements are relative
+        case absolute  // Like a graphics tablet - position maps directly to screen
+    }
+
+    /// Current positioning mode (set to .absolute for mirror mode)
+    var positioningMode: PositioningMode = .relative
 
     /// Dead zone threshold for movement (normalized coordinates)
     /// Movements smaller than this are accumulated until they exceed the threshold
@@ -43,6 +52,70 @@ class CursorController {
 
     /// Process pen data and move/click cursor accordingly.
     func processPenData(_ data: PenData) {
+        switch positioningMode {
+        case .absolute:
+            processAbsolutePositioning(data)
+        case .relative:
+            processRelativePositioning(data)
+        }
+    }
+
+    /// Process pen data with absolute positioning (for mirror mode).
+    /// Touch position maps directly to screen position.
+    private func processAbsolutePositioning(_ data: PenData) {
+        // Update active state
+        let wasActive = isPenActive
+        isPenActive = data.isDown || data.isHovering
+
+        // If pen just lifted, handle mouse up
+        if !isPenActive && wasActive {
+            if isMouseDown {
+                let pos = flippedCursorPosition()
+                mouseUp(at: pos, isRightClick: lastButtonState)
+                isMouseDown = false
+            }
+            lastButtonState = data.buttonPressed
+            return
+        }
+
+        // Calculate absolute screen position from normalized coordinates
+        // data.x and data.y are 0.0-1.0 normalized coordinates
+        let screenX = CGFloat(data.x) * screenBounds.width
+        let screenY = CGFloat(data.y) * screenBounds.height  // Already flipped from Android
+
+        let targetPos = CGPoint(x: screenX, y: screenY)
+
+        // Move cursor to absolute position
+        moveCursor(to: targetPos)
+
+        // Handle dragging
+        if isMouseDown {
+            mouseDrag(to: targetPos)
+        }
+
+        // Determine if pressure exceeds threshold for clicking
+        let pressureExceedsThreshold = data.pressure >= pressureThreshold
+
+        // Handle pen down/up for clicking
+        if data.isDown && pressureExceedsThreshold && !isMouseDown {
+            mouseDown(at: targetPos, isRightClick: data.buttonPressed)
+            isMouseDown = true
+        } else if (!data.isDown || !pressureExceedsThreshold) && isMouseDown {
+            mouseUp(at: targetPos, isRightClick: lastButtonState)
+            isMouseDown = false
+        }
+
+        // Handle button press for right-click
+        if data.buttonPressed && !lastButtonState && !data.isDown {
+            rightClick(at: targetPos)
+        }
+
+        lastButtonState = data.buttonPressed
+    }
+
+    /// Process pen data with relative positioning (for touchpad mode).
+    /// Movements are relative like a trackpad.
+    private func processRelativePositioning(_ data: PenData) {
         // Check if pen just started touching or hovering (new stroke)
         let penJustActivated = (data.isDown || data.isHovering) && !isPenActive
 

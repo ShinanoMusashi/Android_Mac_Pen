@@ -116,8 +116,21 @@
             android:layout_marginEnd="12dp"
             android:background="@drawable/status_indicator" />
 
+        <!-- USB Toggle -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/usbToggle"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginEnd="8dp"
+            android:minWidth="48dp"
+            android:padding="0dp"
+            android:text="USB"
+            android:textSize="11sp" />
+
         <!-- IP Address input -->
         <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/ipInputLayout"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -172,5 +185,300 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/connectionPanel" />
+
+    <!-- Performance Stats Overlay (bottom-left) -->
+    <LinearLayout
+        android:id="@+id/statsOverlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="#CC000000"
+        android:orientation="vertical"
+        android:padding="8dp"
+        android:visibility="gone"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        android:layout_margin="8dp">
+
+        <TextView
+            android:id="@+id/statsFps"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="FPS: --"
+            android:textColor="#00FF00"
+            android:textSize="11sp"
+            android:fontFamily="monospace" />
+
+        <TextView
+            android:id="@+id/statsLowFps"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="1%: -- | 5%: --"
+            android:textColor="#FFFF00"
+            android:textSize="11sp"
+            android:fontFamily="monospace" />
+
+        <TextView
+            android:id="@+id/statsLatency"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="E2E: -- ms"
+            android:textColor="#00FF00"
+            android:textSize="11sp"
+            android:fontFamily="monospace" />
+
+        <TextView
+            android:id="@+id/statsFrameTime"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Frame: -- ms"
+            android:textColor="#00FF00"
+            android:textSize="11sp"
+            android:fontFamily="monospace" />
+
+        <TextView
+            android:id="@+id/statsResolution"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Res: --"
+            android:textColor="#00FF00"
+            android:textSize="11sp"
+            android:fontFamily="monospace" />
+
+        <TextView
+            android:id="@+id/statsBitrate"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Bitrate: --"
+            android:textColor="#00FF00"
+            android:textSize="11sp"
+            android:fontFamily="monospace" />
+
+        <TextView
+            android:id="@+id/statsQueue"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Q: 0 | Drop: 0"
+            android:textColor="#FFFF00"
+            android:textSize="11sp"
+            android:fontFamily="monospace" />
+
+        <TextView
+            android:id="@+id/statsNetwork"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="RTT: -- ms"
+            android:textColor="#00FFFF"
+            android:textSize="11sp"
+            android:fontFamily="monospace" />
+
+        <TextView
+            android:id="@+id/statsKeyframe"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="KF: 0 @ --ms"
+            android:textColor="#FF00FF"
+            android:textSize="11sp"
+            android:fontFamily="monospace" />
+
+        <TextView
+            android:id="@+id/statsDecoder"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Dec: --"
+            android:textColor="#AAAAAA"
+            android:textSize="11sp"
+            android:fontFamily="monospace" />
+
+    </LinearLayout>
+
+    <!-- Right Side Toolbox -->
+    <LinearLayout
+        android:id="@+id/toolbox"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="#CC000000"
+        android:orientation="vertical"
+        android:padding="4dp"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/collapsedBar"
+        android:layout_marginEnd="8dp"
+        android:layout_marginTop="8dp">
+
+        <!-- Cursor Mode Toggle -->
+        <ImageButton
+            android:id="@+id/toolCursor"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="@drawable/tool_button_selected"
+            android:src="@android:drawable/ic_menu_edit"
+            android:contentDescription="Cursor Mode"
+            android:scaleType="centerInside"
+            android:padding="10dp"
+            app:tint="#FFFFFF" />
+
+        <!-- View Only Mode -->
+        <ImageButton
+            android:id="@+id/toolViewOnly"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginTop="4dp"
+            android:background="@drawable/tool_button_normal"
+            android:src="@android:drawable/ic_menu_view"
+            android:contentDescription="View Only"
+            android:scaleType="centerInside"
+            android:padding="10dp"
+            app:tint="#AAAAAA" />
+
+        <View
+            android:layout_width="36dp"
+            android:layout_height="1dp"
+            android:layout_marginVertical="8dp"
+            android:layout_gravity="center_horizontal"
+            android:background="#444444" />
+
+        <!-- Zoom In -->
+        <ImageButton
+            android:id="@+id/toolZoomIn"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="@drawable/tool_button_normal"
+            android:src="@android:drawable/btn_plus"
+            android:contentDescription="Zoom In"
+            android:scaleType="centerInside"
+            android:padding="10dp"
+            app:tint="#FFFFFF" />
+
+        <!-- Zoom Out -->
+        <ImageButton
+            android:id="@+id/toolZoomOut"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginTop="4dp"
+            android:background="@drawable/tool_button_normal"
+            android:src="@android:drawable/btn_minus"
+            android:contentDescription="Zoom Out"
+            android:scaleType="centerInside"
+            android:padding="10dp"
+            app:tint="#FFFFFF" />
+
+        <!-- Zoom indicator -->
+        <TextView
+            android:id="@+id/zoomLevel"
+            android:layout_width="44dp"
+            android:layout_height="wrap_content"
+            android:text="100%"
+            android:textColor="#FFFFFF"
+            android:textSize="10sp"
+            android:gravity="center"
+            android:layout_marginTop="2dp" />
+
+        <View
+            android:layout_width="36dp"
+            android:layout_height="1dp"
+            android:layout_marginVertical="8dp"
+            android:layout_gravity="center_horizontal"
+            android:background="#444444" />
+
+        <!-- Stats Toggle -->
+        <ImageButton
+            android:id="@+id/toolStats"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="@drawable/tool_button_normal"
+            android:src="@android:drawable/ic_menu_info_details"
+            android:contentDescription="Toggle Stats"
+            android:scaleType="centerInside"
+            android:padding="10dp"
+            app:tint="#FFFFFF" />
+
+        <!-- Log Toggle -->
+        <ImageButton
+            android:id="@+id/toolLog"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginTop="4dp"
+            android:background="@drawable/tool_button_normal"
+            android:src="@android:drawable/ic_menu_save"
+            android:contentDescription="Toggle Logging"
+            android:scaleType="centerInside"
+            android:padding="10dp"
+            app:tint="#FFFFFF" />
+
+        <View
+            android:layout_width="36dp"
+            android:layout_height="1dp"
+            android:layout_marginVertical="8dp"
+            android:layout_gravity="center_horizontal"
+            android:background="#444444" />
+
+        <!-- Hide Top Bar -->
+        <ImageButton
+            android:id="@+id/toolHideBar"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="@drawable/tool_button_normal"
+            android:src="@android:drawable/ic_menu_close_clear_cancel"
+            android:contentDescription="Hide Top Bar"
+            android:scaleType="centerInside"
+            android:padding="10dp"
+            app:tint="#FFFFFF" />
+
+        <!-- Fullscreen Toggle -->
+        <ImageButton
+            android:id="@+id/toolFullscreen"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginTop="4dp"
+            android:background="@drawable/tool_button_normal"
+            android:src="@android:drawable/ic_menu_crop"
+            android:contentDescription="Fullscreen"
+            android:scaleType="centerInside"
+            android:padding="10dp"
+            app:tint="#FFFFFF" />
+
+        <!-- Drag Handle -->
+        <View
+            android:id="@+id/toolboxDragHandle"
+            android:layout_width="36dp"
+            android:layout_height="16dp"
+            android:layout_marginTop="8dp"
+            android:layout_gravity="center_horizontal"
+            android:background="#666666" />
+
+    </LinearLayout>
+
+    <!-- Toolbox Toggle Button (FAB style, always visible when connected) -->
+    <ImageButton
+        android:id="@+id/toolboxToggle"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="@drawable/fab_background"
+        android:src="@android:drawable/ic_menu_manage"
+        android:contentDescription="Toggle Toolbox"
+        android:scaleType="centerInside"
+        android:padding="12dp"
+        android:visibility="gone"
+        app:tint="#FFFFFF"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        android:layout_margin="16dp" />
+
+    <!-- Hidden buttons for binding compatibility -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/statsToggleButton"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/logToggleButton"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

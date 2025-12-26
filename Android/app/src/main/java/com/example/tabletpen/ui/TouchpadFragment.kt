@@ -29,6 +29,9 @@ class TouchpadFragment : Fragment() {
     // Sensitivity: 0.5 to 5.0, default 1.5
     private var sensitivity = 1.5f
 
+    // Track if disconnect was user-initiated
+    private var userInitiatedDisconnect = false
+
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -48,17 +51,50 @@ class TouchpadFragment : Fragment() {
         setupSettingsPanel()
         setupPenInput()
         setupBackButtons()
+        setupDisconnectOverlay()
     }
 
     private fun setupBackButtons() {
         binding.backButton.setOnClickListener {
+            userInitiatedDisconnect = true
             penClient.disconnect()
             findNavController().navigateUp()
         }
         binding.backButtonExpanded.setOnClickListener {
+            userInitiatedDisconnect = true
             penClient.disconnect()
             findNavController().navigateUp()
         }
+    }
+
+    private fun setupDisconnectOverlay() {
+        binding.overlayBackButton.setOnClickListener {
+            userInitiatedDisconnect = true
+            penClient.disconnect()
+            findNavController().navigateUp()
+        }
+
+        binding.overlayReconnectButton.setOnClickListener {
+            hideDisconnectOverlay()
+            connect()
+        }
+
+        // Floating disconnect button
+        binding.floatingDisconnectButton.setOnClickListener {
+            userInitiatedDisconnect = true
+            penClient.disconnect()
+            findNavController().navigateUp()
+        }
+    }
+
+    private fun showDisconnectOverlay() {
+        if (_binding == null) return
+        binding.disconnectOverlay.visibility = View.VISIBLE
+    }
+
+    private fun hideDisconnectOverlay() {
+        if (_binding == null) return
+        binding.disconnectOverlay.visibility = View.GONE
     }
 
     private fun loadSettings() {
@@ -90,6 +126,7 @@ class TouchpadFragment : Fragment() {
         // Connect button
         binding.connectButton.setOnClickListener {
             if (penClient.isConnected) {
+                userInitiatedDisconnect = true
                 penClient.disconnect()
             } else {
                 connect()
@@ -190,8 +227,15 @@ class TouchpadFragment : Fragment() {
             binding.collapsedStatusText.text = getString(R.string.status_connected)
             binding.collapsedStatusText.setTextColor(greenColor)
 
-            // Collapse the connection panel after successful connection
+            // Hide disconnect overlay and collapse the connection panel
+            hideDisconnectOverlay()
             showCollapsedConnectionBar()
+
+            // Show floating disconnect button
+            binding.floatingDisconnectButton.visibility = View.VISIBLE
+
+            // Reset user-initiated flag for next potential disconnect
+            userInitiatedDisconnect = false
         } else {
             binding.statusText.text = getString(R.string.status_disconnected)
             binding.statusText.setTextColor(ContextCompat.getColor(requireContext(), R.color.disconnected_red))
@@ -204,8 +248,16 @@ class TouchpadFragment : Fragment() {
             binding.collapsedStatusText.text = getString(R.string.status_disconnected)
             binding.collapsedStatusText.setTextColor(redColor)
 
-            // Show expanded panel when disconnected
-            showExpandedConnectionPanel()
+            // Hide floating disconnect button
+            binding.floatingDisconnectButton.visibility = View.GONE
+
+            // Show disconnect overlay if this was unexpected (not user-initiated)
+            if (!userInitiatedDisconnect) {
+                showDisconnectOverlay()
+            } else {
+                // Show expanded panel when user disconnected manually
+                showExpandedConnectionPanel()
+            }
         }
     }
 
@@ -219,6 +271,7 @@ class TouchpadFragment : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
+        userInitiatedDisconnect = true
         penClient.disconnect()
         _binding = null
     }

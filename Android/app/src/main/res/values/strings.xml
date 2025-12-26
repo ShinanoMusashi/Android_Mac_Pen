@@ -21,4 +21,13 @@
     <string name="mode_mirror_title">Screen Mirror Mode</string>
     <string name="mode_mirror_desc">Mirror your Mac screen and control it with your pen</string>
     <string name="mirror_placeholder">Connect to Mac to start screen mirroring</string>
+
+    <!-- Disconnect overlay -->
+    <string name="connection_lost">Connection Lost</string>
+    <string name="connection_lost_message">The connection to your Mac was interrupted.</string>
+    <string name="reconnect">Reconnect</string>
+    <string name="go_back">Go Back</string>
+
+    <!-- Stats overlay -->
+    <string name="stats">Stats</string>
 </resources>

@@ -11,30 +11,33 @@ Android tablet pen input system with two modes:
 ## Task Checklist
 
 ### Task 1: Disconnect Popup in Cursor Mode
-- [ ] **Status**: Not started
+- [x] **Status**: COMPLETED (Dec 26, 2024)
 - **Problem**: No popup notification when disconnected in Touchpad mode (unlike Monitor mode behavior expected)
 - **Current Behavior**: Both modes just change status text color to red, no actual popup exists in either
-- **Solution**: Add overlay/dialog that appears on unexpected disconnect
-- **Files to modify**:
-  - `Android/app/src/main/java/com/example/tabletpen/ui/TouchpadFragment.kt`
-  - Consider creating `DisconnectOverlayView.kt` or use AlertDialog
+- **Solution**: Added overlay/dialog that appears on unexpected disconnect
+- **Files modified**:
+  - `Android/app/src/main/java/com/example/tabletpen/ui/TouchpadFragment.kt` - Added disconnect overlay logic
+  - `Android/app/src/main/res/layout/fragment_touchpad.xml` - Added disconnect overlay UI
+  - `Android/app/src/main/res/values/strings.xml` - Added new strings
 
 ---
 
 ### Task 2: Performance Stats Overlay (Monitor Mode)
-- [ ] **Status**: Not started
+- [x] **Status**: COMPLETED (Dec 26, 2024)
 - **Problem**: No way to see latency, FPS, resolution, etc. during mirroring
-- **Features needed**:
-  - [ ] Real-time latency display (ms)
-  - [ ] Decoded FPS counter
-  - [ ] Current resolution display
-  - [ ] Bitrate indicator
-  - [ ] Dropped frame counter
-  - [ ] Toggle button to show/hide stats
-- **Files to modify**:
-  - `Android/app/src/main/java/com/example/tabletpen/ui/MirrorFragment.kt`
-  - `Android/app/src/main/java/com/example/tabletpen/mirror/VideoDecoder.kt`
-  - `Android/app/res/layout/fragment_mirror.xml`
+- **Features implemented**:
+  - [x] Real-time latency display (ms) - color-coded (green < 50ms, yellow < 100ms, red > 100ms)
+  - [x] Decoded FPS counter - color-coded (green >= 55fps, yellow >= 30fps, red < 30fps)
+  - [x] Current resolution display
+  - [x] Bitrate indicator
+  - [x] Dropped frame counter
+  - [x] Toggle button to show/hide stats
+- **Files modified**:
+  - `Android/app/src/main/java/com/example/tabletpen/ui/MirrorFragment.kt` - Added stats display logic
+  - `Android/app/src/main/java/com/example/tabletpen/mirror/VideoDecoder.kt` - Added FPS/dropped frame tracking
+  - `Android/app/src/main/java/com/example/tabletpen/mirror/MirrorClient.kt` - Added PING/PONG latency measurement
+  - `Android/app/src/main/res/layout/fragment_mirror.xml` - Added stats overlay UI
+  - `Android/app/src/main/res/values/strings.xml` - Added new strings
 
 ---
 
@@ -180,6 +183,8 @@ Android_Mac_Pen/
 | Date | Task | Status | Notes |
 |------|------|--------|-------|
 | Dec 26, 2024 | Project Analysis | Done | Identified all improvement areas |
-| | | | |
+| Dec 26, 2024 | Task 1: Disconnect Popup | Done | Added overlay for unexpected disconnects in Touchpad mode |
+| Dec 26, 2024 | Task 2: Stats Overlay | Done | Added FPS, latency, resolution, bitrate, dropped frames display |
+| Dec 26, 2024 | Latency Measurement | Done | Implemented PING/PONG for round-trip timing |
 | | | | |
 

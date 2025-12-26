@@ -4,7 +4,6 @@ import com.example.tabletpen.PenData
 import com.example.tabletpen.protocol.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.consumeEach
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.InetSocketAddress
@@ -29,10 +28,20 @@ class MirrorClient {
     private sealed class OutgoingMessage {
         data class PenDataMsg(val data: PenData) : OutgoingMessage()
         data class ModeRequestMsg(val mode: AppMode) : OutgoingMessage()
+        data class QualityRequestMsg(val bitrateMbps: Int) : OutgoingMessage()
+        data class ROIUpdateMsg(val x: Float, val y: Float, val width: Float, val height: Float) : OutgoingMessage()
+        object PingMsg : OutgoingMessage()
     }
 
     @Volatile
     var isConnected = false
+        private set
+
+    // Latency measurement
+    private var pingJob: Job? = null
+    private var lastPingTime = 0L
+    @Volatile
+    var currentLatency = -1L
         private set
 
     // Callbacks
@@ -41,6 +50,7 @@ class MirrorClient {
     var onConnectionChanged: ((Boolean) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
     var onModeAck: ((AppMode) -> Unit)? = null
+    var onLatencyUpdate: ((Long) -> Unit)? = null
 
     /**
      * Connect to the Mac server.
@@ -62,6 +72,7 @@ class MirrorClient {
             // Start receive and send loops
             startReceiveLoop()
             startSendLoop()
+            startPingLoop()
 
             withContext(Dispatchers.Main) {
                 onConnectionChanged?.invoke(true)
@@ -83,6 +94,8 @@ class MirrorClient {
     fun disconnect() {
         isConnected = false
 
+        pingJob?.cancel()
+        pingJob = null
         receiveJob?.cancel()
         receiveJob = null
         sendJob?.cancel()
@@ -97,6 +110,7 @@ class MirrorClient {
         socket = null
         inputStream = null
         outputStream = null
+        currentLatency = -1
 
         onConnectionChanged?.invoke(false)
     }
@@ -115,6 +129,30 @@ class MirrorClient {
         sendModeRequest(AppMode.TOUCHPAD)
     }
 
+    /**
+     * Request quality settings from server.
+     * @param bitrateMbps Desired bitrate in Mbps (e.g., 35 for WiFi, 50 for USB)
+     */
+    fun requestQuality(bitrateMbps: Int) {
+        if (!isConnected) return
+        scope.launch {
+            sendChannel.send(OutgoingMessage.QualityRequestMsg(bitrateMbps))
+        }
+    }
+
+    /**
+     * Update region of interest for zoomed streaming.
+     * All values are normalized (0.0 to 1.0) relative to screen size.
+     * @param x Left position (0.0 = left edge)
+     * @param y Top position (0.0 = top edge)
+     * @param width Width of region (1.0 = full width)
+     * @param height Height of region (1.0 = full height)
+     */
+    fun updateROI(x: Float, y: Float, width: Float, height: Float) {
+        if (!isConnected) return
+        sendChannel.trySend(OutgoingMessage.ROIUpdateMsg(x, y, width, height))
+    }
+
     private fun sendModeRequest(mode: AppMode) {
         if (!isConnected) return
         scope.launch {
@@ -131,6 +169,17 @@ class MirrorClient {
         sendChannel.trySend(OutgoingMessage.PenDataMsg(penData))
     }
 
+    private fun startPingLoop() {
+        pingJob = scope.launch {
+            while (isActive && isConnected) {
+                delay(1000) // Send ping every second
+                if (isConnected) {
+                    sendChannel.trySend(OutgoingMessage.PingMsg)
+                }
+            }
+        }
+    }
+
     private fun startSendLoop() {
         sendJob = scope.launch {
             try {
@@ -144,6 +193,16 @@ class MirrorClient {
                         }
                         is OutgoingMessage.ModeRequestMsg -> {
                             ProtocolCodec.writeModeRequest(output, message.mode)
+                        }
+                        is OutgoingMessage.QualityRequestMsg -> {
+                            ProtocolCodec.writeQualityRequest(output, message.bitrateMbps)
+                        }
+                        is OutgoingMessage.ROIUpdateMsg -> {
+                            ProtocolCodec.writeROIUpdate(output, message.x, message.y, message.width, message.height)
+                        }
+                        is OutgoingMessage.PingMsg -> {
+                            lastPingTime = System.currentTimeMillis()
+                            ProtocolCodec.writePing(output)
                         }
                     }
                 }
@@ -201,7 +260,13 @@ class MirrorClient {
             }
 
             MessageType.PONG -> {
-                // Ping response, ignore
+                // Calculate round-trip latency
+                if (lastPingTime > 0) {
+                    currentLatency = System.currentTimeMillis() - lastPingTime
+                    withContext(Dispatchers.Main) {
+                        onLatencyUpdate?.invoke(currentLatency)
+                    }
+                }
             }
 
             else -> {

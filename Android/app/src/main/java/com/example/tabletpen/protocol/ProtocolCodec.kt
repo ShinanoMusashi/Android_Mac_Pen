@@ -48,6 +48,35 @@ object ProtocolCodec {
     }
 
     /**
+     * Write quality request message.
+     * @param bitrateMbps Desired bitrate in Mbps (e.g., 35 for WiFi, 50 for USB)
+     */
+    fun writeQualityRequest(output: DataOutputStream, bitrateMbps: Int) {
+        val payload = ByteArray(4)
+        val buffer = java.nio.ByteBuffer.wrap(payload)
+        buffer.putInt(bitrateMbps)
+        writeMessage(output, MessageType.QUALITY_REQUEST, payload)
+    }
+
+    /**
+     * Write ROI (Region of Interest) update message.
+     * All values are normalized (0.0 to 1.0) relative to screen size.
+     * @param x Left position (0.0 = left edge)
+     * @param y Top position (0.0 = top edge)
+     * @param width Width of region
+     * @param height Height of region
+     */
+    fun writeROIUpdate(output: DataOutputStream, x: Float, y: Float, width: Float, height: Float) {
+        val payload = ByteArray(16)
+        val buffer = java.nio.ByteBuffer.wrap(payload)
+        buffer.putFloat(x)
+        buffer.putFloat(y)
+        buffer.putFloat(width)
+        buffer.putFloat(height)
+        writeMessage(output, MessageType.ROI_UPDATE, payload)
+    }
+
+    /**
      * Write pong message.
      */
     fun writePong(output: DataOutputStream) {

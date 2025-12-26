@@ -1,15 +1,17 @@
 package com.example.tabletpen.mirror
 
 import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.view.Surface
-import java.nio.ByteBuffer
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.concurrent.thread
 
 /**
- * H.264 video decoder using MediaCodec.
+ * H.265/HEVC video decoder using MediaCodec.
  * Decodes NAL units received from the Mac and renders to a Surface.
+ * HEVC provides ~50% better compression than H.264 at same quality.
  */
 class VideoDecoder {
     private var codec: MediaCodec? = null
@@ -19,8 +21,8 @@ class VideoDecoder {
     private var width = 0
     private var height = 0
 
-    // Queue for incoming NAL data
-    private val nalQueue = LinkedBlockingQueue<NalUnit>(30)
+    // Reduced queue size for lower latency (was 30, now 5)
+    private val nalQueue = LinkedBlockingQueue<NalUnit>(5)
 
     // Decoder thread
     private var decoderThread: Thread? = null
@@ -28,11 +30,24 @@ class VideoDecoder {
     // Track if we've received SPS/PPS
     private var hasReceivedKeyframe = false
 
+    // Performance stats
+    var stats: PerformanceStats? = null
+
+    // Legacy callback for backwards compatibility
+    var onStatsUpdate: ((fps: Float, dropped: Long) -> Unit)? = null
+
     data class NalUnit(
         val data: ByteArray,
-        val timestamp: Long,
-        val isKeyframe: Boolean
+        val timestamp: Long,  // Capture timestamp from Mac (nanoseconds)
+        val isKeyframe: Boolean,
+        val receiveTime: Long = System.currentTimeMillis()  // When we received this frame
     )
+
+    // Track decoder info
+    var decoderName: String = "unknown"
+        private set
+    var isHardwareDecoder: Boolean = false
+        private set
 
     /**
      * Initialize the decoder with video configuration.
@@ -42,17 +57,38 @@ class VideoDecoder {
         this.width = width
         this.height = height
 
-        try {
-            // Create H.264 decoder
-            codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        // Update stats
+        stats?.sourceWidth = width
+        stats?.sourceHeight = height
 
-            // Configure with format
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height)
+        try {
+            // Find and prefer hardware HEVC decoder
+            val codecName = findHardwareDecoder() ?: MediaFormat.MIMETYPE_VIDEO_HEVC
+
+            codec = if (codecName != MediaFormat.MIMETYPE_VIDEO_HEVC) {
+                // Use specific codec by name
+                MediaCodec.createByCodecName(codecName)
+            } else {
+                // Fallback to default selection
+                MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_HEVC)
+            }
+
+            decoderName = codec?.name ?: "unknown"
+            isHardwareDecoder = !decoderName.contains("google", ignoreCase = true) &&
+                               !decoderName.contains("c2.android", ignoreCase = true)
+
+            android.util.Log.i("VideoDecoder", "Using HEVC decoder: $decoderName (hardware: $isHardwareDecoder)")
+
+            // Configure with HEVC format
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, width, height)
 
             // Low latency mode if available (Android 11+)
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
                 format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
+
+            // Additional low-latency settings
+            format.setInteger(MediaFormat.KEY_PRIORITY, 0) // Real-time priority
 
             codec?.configure(format, surface, null, 0)
             codec?.start()
@@ -60,11 +96,40 @@ class VideoDecoder {
             isRunning = true
             startDecoderThread()
 
+            android.util.Log.i("VideoDecoder", "Initialized: ${width}x${height}, queue size: ${nalQueue.remainingCapacity() + nalQueue.size}")
+
             return true
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("VideoDecoder", "Failed to initialize", e)
             return false
         }
+    }
+
+    /**
+     * Find a hardware H.265/HEVC decoder.
+     * Returns codec name if found, null otherwise.
+     */
+    private fun findHardwareDecoder(): String? {
+        val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+
+        for (codecInfo in codecList.codecInfos) {
+            if (codecInfo.isEncoder) continue
+
+            for (type in codecInfo.supportedTypes) {
+                if (type.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true)) {
+                    val name = codecInfo.name
+                    // Prefer hardware decoders (not google/android software)
+                    if (!name.contains("google", ignoreCase = true) &&
+                        !name.contains("c2.android", ignoreCase = true)) {
+                        android.util.Log.i("VideoDecoder", "Found hardware HEVC decoder: $name")
+                        return name
+                    }
+                }
+            }
+        }
+
+        android.util.Log.w("VideoDecoder", "No hardware HEVC decoder found, using default")
+        return null
     }
 
     /**
@@ -80,10 +145,22 @@ class VideoDecoder {
 
         if (isKeyframe) {
             hasReceivedKeyframe = true
+            stats?.onKeyframe()
+            // On keyframe, optionally clear queue to reduce latency
+            // nalQueue.clear()  // Uncomment for aggressive latency reduction
         }
 
+        val nalUnit = NalUnit(nalData, timestamp, isKeyframe)
+
+        // Track queue depth
+        stats?.onFrameReceived(timestamp, nalQueue.size)
+
         // Queue the NAL unit (drop if queue is full to prevent latency buildup)
-        nalQueue.offer(NalUnit(nalData, timestamp, isKeyframe))
+        val queued = nalQueue.offer(nalUnit)
+        if (!queued) {
+            stats?.onFrameDropped()
+            android.util.Log.w("VideoDecoder", "Frame dropped - queue full (${nalQueue.size})")
+        }
     }
 
     private fun startDecoderThread() {
@@ -92,19 +169,25 @@ class VideoDecoder {
 
             while (isRunning) {
                 try {
-                    // Get NAL unit from queue
-                    val nalUnit = nalQueue.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    // Get NAL unit from queue with shorter timeout
+                    val nalUnit = nalQueue.poll(50, java.util.concurrent.TimeUnit.MILLISECONDS)
                         ?: continue
+
+                    // Log queue latency
+                    val queueLatency = System.currentTimeMillis() - nalUnit.receiveTime
+                    if (queueLatency > 100) {
+                        android.util.Log.w("VideoDecoder", "High queue latency: ${queueLatency}ms")
+                    }
 
                     // Feed to decoder
                     feedDecoder(nalUnit)
 
                     // Drain output
-                    drainDecoder(bufferInfo)
+                    drainDecoder(bufferInfo, nalUnit.timestamp)
                 } catch (e: InterruptedException) {
                     break
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    android.util.Log.e("VideoDecoder", "Decoder error", e)
                 }
             }
         }
@@ -113,25 +196,28 @@ class VideoDecoder {
     private fun feedDecoder(nalUnit: NalUnit) {
         val codec = codec ?: return
 
-        // Get input buffer
-        val inputIndex = codec.dequeueInputBuffer(10000) // 10ms timeout
-        if (inputIndex < 0) return
+        // Get input buffer with shorter timeout
+        val inputIndex = codec.dequeueInputBuffer(5000) // 5ms timeout
+        if (inputIndex < 0) {
+            android.util.Log.w("VideoDecoder", "No input buffer available")
+            return
+        }
 
         val inputBuffer = codec.getInputBuffer(inputIndex) ?: return
         inputBuffer.clear()
         inputBuffer.put(nalUnit.data)
 
-        // Queue to decoder
+        // Queue to decoder with capture timestamp
         codec.queueInputBuffer(
             inputIndex,
             0,
             nalUnit.data.size,
-            nalUnit.timestamp / 1000, // Convert ns to us
+            nalUnit.timestamp / 1000, // Convert ns to us for MediaCodec
             if (nalUnit.isKeyframe) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
         )
     }
 
-    private fun drainDecoder(bufferInfo: MediaCodec.BufferInfo) {
+    private fun drainDecoder(bufferInfo: MediaCodec.BufferInfo, captureTimestamp: Long) {
         val codec = codec ?: return
 
         while (true) {
@@ -139,15 +225,28 @@ class VideoDecoder {
 
             when {
                 outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
-                    // No output available yet
                     break
                 }
                 outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    // Format changed, ignore for now
+                    val format = codec.outputFormat
+                    val newWidth = format.getInteger(MediaFormat.KEY_WIDTH)
+                    val newHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
+                    stats?.decodedWidth = newWidth
+                    stats?.decodedHeight = newHeight
+                    android.util.Log.i("VideoDecoder", "Output format changed: ${newWidth}x${newHeight}")
                 }
                 outputIndex >= 0 -> {
                     // Got output frame, release to surface for rendering
                     codec.releaseOutputBuffer(outputIndex, true)
+
+                    // Update stats
+                    stats?.onFrameDecoded(captureTimestamp)
+
+                    // Legacy callback
+                    val currentStats = stats
+                    if (currentStats != null) {
+                        onStatsUpdate?.invoke(currentStats.currentFps, currentStats.queueDepth.toLong())
+                    }
                 }
                 else -> {
                     break
@@ -155,6 +254,11 @@ class VideoDecoder {
             }
         }
     }
+
+    /**
+     * Get current queue depth.
+     */
+    fun getQueueDepth(): Int = nalQueue.size
 
     /**
      * Stop the decoder and release resources.
@@ -177,6 +281,8 @@ class VideoDecoder {
         surface = null
         hasReceivedKeyframe = false
         nalQueue.clear()
+
+        android.util.Log.i("VideoDecoder", "Released")
     }
 
     /**

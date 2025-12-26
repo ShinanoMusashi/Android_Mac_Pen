@@ -89,6 +89,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         server.onModeRequest = { [weak self] mode in
             self?.handleModeRequest(mode)
         }
+
+        server.onQualityRequest = { [weak self] bitrateMbps in
+            self?.handleQualityRequest(bitrateMbps)
+        }
+
+        server.onROIUpdate = { [weak self] roi in
+            self?.handleROIUpdate(roi)
+        }
+    }
+
+    private func handleROIUpdate(_ roi: RegionOfInterest) {
+        screenCapture?.updateROI(roi)
+    }
+
+    private var requestedBitrate: Int = 35_000_000  // Default bitrate
+
+    private func handleQualityRequest(_ bitrateMbps: Int) {
+        requestedBitrate = bitrateMbps * 1_000_000
+        print("Quality request received: \(bitrateMbps) Mbps")
+
+        // If already mirroring, restart with new settings
+        if isMirroring {
+            stopMirroring()
+            startMirroring()
+        }
     }
 
     private func handleModeRequest(_ mode: AppMode) {
@@ -97,11 +122,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         switch mode {
         case .touchpad:
             stopMirroring()
-            print("Switched to Touchpad mode")
+            cursorController.positioningMode = .relative
+            print("Switched to Touchpad mode (relative positioning)")
 
         case .screenMirror:
             startMirroring()
-            print("Switched to Screen Mirror mode")
+            cursorController.positioningMode = .absolute
+            print("Switched to Screen Mirror mode (absolute positioning)")
         }
     }
 
@@ -121,9 +148,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let capture = ScreenCapture()
         let nativeSize = capture.nativeScreenSize
 
-        // For cable connection, use full resolution or near-native
-        // Max 1920 width for good balance of quality and performance
-        let maxWidth: CGFloat = 1920
+        // For USB connection, use higher resolution (up to 1440p)
+        // Max 2560 width for 1440p support
+        let maxWidth: CGFloat = 2560
         let scale = min(1.0, maxWidth / nativeSize.width)
         let outputWidth = Int(nativeSize.width * scale)
         let outputHeight = Int(nativeSize.height * scale)
@@ -131,7 +158,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Initialize encoder
         let encoder = VideoEncoder()
         let fps = 60  // Higher framerate for smoother experience
-        let bitrate = 15_000_000  // 15 Mbps for cable connection
+        // Use requested bitrate (set via quality request from Android)
+        // USB: 50 Mbps, WiFi: 35 Mbps
+        let bitrate = requestedBitrate
 
         guard encoder.initialize(width: outputWidth, height: outputHeight, fps: fps, bitrate: bitrate) else {
             print("Failed to initialize video encoder")

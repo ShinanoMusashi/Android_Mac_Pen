@@ -24,6 +24,8 @@ class PenServer {
     var onClientDisconnected: (() -> Void)?
     var onError: ((String) -> Void)?
     var onModeRequest: ((AppMode) -> Void)?
+    var onQualityRequest: ((Int) -> Void)?  // Bitrate in Mbps
+    var onROIUpdate: ((RegionOfInterest) -> Void)?  // Region of interest for zoomed streaming
 
     init(port: UInt16 = 9876) {
         self.port = port
@@ -189,9 +191,25 @@ class PenServer {
                 sendModeAck(mode)
             }
 
+        case .qualityRequest:
+            if let bitrateMbps = ProtocolCodec.decodeQualityRequest(from: message.payload) {
+                print("Quality request: \(bitrateMbps) Mbps")
+                DispatchQueue.main.async {
+                    self.onQualityRequest?(bitrateMbps)
+                }
+            }
+
         case .ping:
             // Respond with pong
             sendPong()
+
+        case .roiUpdate:
+            if let roi = ProtocolCodec.decodeROI(from: message.payload) {
+                print("ROI update: x=\(roi.x), y=\(roi.y), w=\(roi.width), h=\(roi.height)")
+                DispatchQueue.main.async {
+                    self.onROIUpdate?(roi)
+                }
+            }
 
         default:
             // Ignore other message types from client
