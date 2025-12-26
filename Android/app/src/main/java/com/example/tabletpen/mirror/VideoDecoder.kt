@@ -11,7 +11,7 @@ import kotlin.concurrent.thread
 /**
  * H.265/HEVC video decoder using MediaCodec.
  * Decodes NAL units received from the Mac and renders to a Surface.
- * HEVC provides ~50% better compression than H.264 at same quality.
+ * HEVC is used because it's faster on Apple Silicon.
  */
 class VideoDecoder {
     private var codec: MediaCodec? = null
@@ -107,7 +107,7 @@ class VideoDecoder {
     }
 
     /**
-     * Find a hardware H.265/HEVC decoder.
+     * Find a hardware HEVC decoder.
      * Returns codec name if found, null otherwise.
      */
     private fun findHardwareDecoder(): String? {
