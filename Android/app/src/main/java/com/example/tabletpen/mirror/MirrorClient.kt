@@ -44,6 +44,9 @@ class MirrorClient {
     var currentLatency = -1L
         private set
 
+    // Performance stats for timing
+    var stats: PerformanceStats? = null
+
     // Callbacks
     var onVideoConfig: ((VideoConfig) -> Unit)? = null
     var onVideoFrame: ((VideoFrame) -> Unit)? = null
@@ -243,6 +246,9 @@ class MirrorClient {
 
             MessageType.VIDEO_FRAME -> {
                 ProtocolCodec.parseVideoFrame(message.payload)?.let { frame ->
+                    // Timing: record network receive
+                    stats?.onNetworkReceive(frame.frameNumber, frame.nalData.size, frame.isKeyframe)
+
                     // Don't switch to Main thread for frames (performance)
                     onVideoFrame?.invoke(frame)
                 }

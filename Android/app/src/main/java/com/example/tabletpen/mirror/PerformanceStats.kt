@@ -69,6 +69,38 @@ class PerformanceStats(private val context: Context? = null) {
     private var loggingEnabled = false
     private val dateFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
+    // Detailed pipeline timing
+    private var pipelineLogWriter: FileWriter? = null
+    private var pipelineLoggingEnabled = false
+
+    // Per-frame timing data
+    data class FrameTiming(
+        val frameNumber: Int,
+        var receiveTime: Long = 0,      // When network bytes received
+        var parseTime: Long = 0,        // When message parsed
+        var queueTime: Long = 0,        // When added to decode queue
+        var decodeInputTime: Long = 0,  // When fed to decoder
+        var decodeOutputTime: Long = 0, // When output buffer received
+        var renderTime: Long = 0,       // When released to surface
+        var nalSize: Int = 0,
+        var isKeyframe: Boolean = false
+    )
+
+    private val frameTimings = LinkedHashMap<Int, FrameTiming>()
+    private val maxFrameTimings = 100
+
+    // Pipeline stage averages (ms)
+    var avgNetworkToQueue = 0f
+        private set
+    var avgQueueWait = 0f
+        private set
+    var avgDecodeTime = 0f
+        private set
+    var avgDecodeToRender = 0f
+        private set
+    var avgTotalPipeline = 0f
+        private set
+
     /**
      * Record a frame being received (before decode).
      */
@@ -137,6 +169,175 @@ class PerformanceStats(private val context: Context? = null) {
             keyframeInterval = now - lastKeyframeTime
         }
         lastKeyframeTime = now
+    }
+
+    // MARK: - Detailed Pipeline Timing
+
+    /**
+     * Record when frame bytes are received from network.
+     */
+    fun onNetworkReceive(frameNumber: Int, nalSize: Int, isKeyframe: Boolean) {
+        synchronized(frameTimings) {
+            val timing = FrameTiming(frameNumber).apply {
+                receiveTime = System.nanoTime()
+                this.nalSize = nalSize
+                this.isKeyframe = isKeyframe
+            }
+            frameTimings[frameNumber] = timing
+
+            // Limit size
+            while (frameTimings.size > maxFrameTimings) {
+                frameTimings.remove(frameTimings.keys.first())
+            }
+        }
+    }
+
+    /**
+     * Record when frame is parsed and ready for decode.
+     */
+    fun onFrameParsed(frameNumber: Int) {
+        synchronized(frameTimings) {
+            frameTimings[frameNumber]?.parseTime = System.nanoTime()
+        }
+    }
+
+    /**
+     * Record when frame is added to decode queue.
+     */
+    fun onQueueEntry(frameNumber: Int) {
+        synchronized(frameTimings) {
+            frameTimings[frameNumber]?.queueTime = System.nanoTime()
+        }
+    }
+
+    /**
+     * Record when frame is fed to decoder input.
+     */
+    fun onDecodeInput(frameNumber: Int) {
+        synchronized(frameTimings) {
+            frameTimings[frameNumber]?.decodeInputTime = System.nanoTime()
+        }
+    }
+
+    /**
+     * Record when decoder produces output.
+     */
+    fun onDecodeOutput(frameNumber: Int) {
+        synchronized(frameTimings) {
+            frameTimings[frameNumber]?.decodeOutputTime = System.nanoTime()
+        }
+    }
+
+    /**
+     * Record when frame is rendered to surface.
+     */
+    fun onRender(frameNumber: Int) {
+        synchronized(frameTimings) {
+            val timing = frameTimings[frameNumber] ?: return@synchronized
+            timing.renderTime = System.nanoTime()
+
+            // Log this frame
+            logPipelineTiming(timing)
+
+            // Update averages
+            updatePipelineAverages(timing)
+        }
+    }
+
+    private fun updatePipelineAverages(timing: FrameTiming) {
+        if (timing.receiveTime == 0L || timing.renderTime == 0L) return
+
+        val networkToQueue = if (timing.queueTime > 0 && timing.receiveTime > 0)
+            (timing.queueTime - timing.receiveTime) / 1_000_000f else 0f
+        val queueWait = if (timing.decodeInputTime > 0 && timing.queueTime > 0)
+            (timing.decodeInputTime - timing.queueTime) / 1_000_000f else 0f
+        val decodeTime = if (timing.decodeOutputTime > 0 && timing.decodeInputTime > 0)
+            (timing.decodeOutputTime - timing.decodeInputTime) / 1_000_000f else 0f
+        val decodeToRender = if (timing.renderTime > 0 && timing.decodeOutputTime > 0)
+            (timing.renderTime - timing.decodeOutputTime) / 1_000_000f else 0f
+        val total = (timing.renderTime - timing.receiveTime) / 1_000_000f
+
+        // Exponential moving average (alpha = 0.1)
+        val alpha = 0.1f
+        avgNetworkToQueue = avgNetworkToQueue * (1 - alpha) + networkToQueue * alpha
+        avgQueueWait = avgQueueWait * (1 - alpha) + queueWait * alpha
+        avgDecodeTime = avgDecodeTime * (1 - alpha) + decodeTime * alpha
+        avgDecodeToRender = avgDecodeToRender * (1 - alpha) + decodeToRender * alpha
+        avgTotalPipeline = avgTotalPipeline * (1 - alpha) + total * alpha
+    }
+
+    private fun logPipelineTiming(timing: FrameTiming) {
+        if (!pipelineLoggingEnabled || pipelineLogWriter == null) return
+
+        try {
+            val networkToQueue = if (timing.queueTime > 0)
+                (timing.queueTime - timing.receiveTime) / 1_000_000f else 0f
+            val queueWait = if (timing.decodeInputTime > 0 && timing.queueTime > 0)
+                (timing.decodeInputTime - timing.queueTime) / 1_000_000f else 0f
+            val decodeTime = if (timing.decodeOutputTime > 0 && timing.decodeInputTime > 0)
+                (timing.decodeOutputTime - timing.decodeInputTime) / 1_000_000f else 0f
+            val decodeToRender = if (timing.renderTime > 0 && timing.decodeOutputTime > 0)
+                (timing.renderTime - timing.decodeOutputTime) / 1_000_000f else 0f
+            val total = (timing.renderTime - timing.receiveTime) / 1_000_000f
+
+            val line = "${timing.frameNumber},${networkToQueue},${queueWait},${decodeTime},${decodeToRender},${total},${timing.nalSize},${if (timing.isKeyframe) 1 else 0}\n"
+            pipelineLogWriter?.write(line)
+            pipelineLogWriter?.flush()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * Start detailed pipeline logging.
+     */
+    fun startPipelineLogging() {
+        try {
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            val dir = context?.getExternalFilesDir(null) ?: return
+            val file = File(dir, "pipeline_timing_$timestamp.csv")
+            pipelineLogWriter = FileWriter(file, true)
+            pipelineLogWriter?.write("frame,net_to_queue_ms,queue_wait_ms,decode_ms,decode_to_render_ms,total_ms,nal_size,keyframe\n")
+            pipelineLoggingEnabled = true
+            android.util.Log.i("PerformanceStats", "Pipeline logging to: ${file.absolutePath}")
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * Stop pipeline logging and print summary.
+     */
+    fun stopPipelineLogging() {
+        if (pipelineLoggingEnabled) {
+            printPipelineSummary()
+        }
+        pipelineLoggingEnabled = false
+        try {
+            pipelineLogWriter?.close()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        pipelineLogWriter = null
+    }
+
+    /**
+     * Print pipeline timing summary to log.
+     */
+    fun printPipelineSummary() {
+        android.util.Log.i("PerformanceStats", """
+
+            📊 Android Pipeline Timing (averages):
+            ┌─────────────────────────────────────────┐
+            │ Network → Queue:    ${String.format("%6.2f", avgNetworkToQueue)} ms       │
+            │ Queue Wait:         ${String.format("%6.2f", avgQueueWait)} ms       │
+            │ Decode Time:        ${String.format("%6.2f", avgDecodeTime)} ms       │
+            │ Decode → Render:    ${String.format("%6.2f", avgDecodeToRender)} ms       │
+            ├─────────────────────────────────────────┤
+            │ Total Android:      ${String.format("%6.2f", avgTotalPipeline)} ms       │
+            └─────────────────────────────────────────┘
+
+        """.trimIndent())
     }
 
     private fun calculateStats() {

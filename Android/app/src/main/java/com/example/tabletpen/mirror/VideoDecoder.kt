@@ -40,6 +40,7 @@ class VideoDecoder {
         val data: ByteArray,
         val timestamp: Long,  // Capture timestamp from Mac (nanoseconds)
         val isKeyframe: Boolean,
+        val frameNumber: Int,  // Frame number from Mac for timing correlation
         val receiveTime: Long = System.currentTimeMillis()  // When we received this frame
     )
 
@@ -134,8 +135,9 @@ class VideoDecoder {
 
     /**
      * Queue NAL data for decoding.
+     * @param frameNumber Frame number from Mac for timing correlation
      */
-    fun decode(nalData: ByteArray, timestamp: Long, isKeyframe: Boolean) {
+    fun decode(nalData: ByteArray, timestamp: Long, isKeyframe: Boolean, frameNumber: Int) {
         if (!isRunning) return
 
         // If we haven't received a keyframe yet, wait for one
@@ -150,10 +152,13 @@ class VideoDecoder {
             // nalQueue.clear()  // Uncomment for aggressive latency reduction
         }
 
-        val nalUnit = NalUnit(nalData, timestamp, isKeyframe)
+        val nalUnit = NalUnit(nalData, timestamp, isKeyframe, frameNumber)
 
         // Track queue depth
         stats?.onFrameReceived(timestamp, nalQueue.size)
+
+        // Timing: frame entering decode queue
+        stats?.onQueueEntry(frameNumber)
 
         // Queue the NAL unit (drop if queue is full to prevent latency buildup)
         val queued = nalQueue.offer(nalUnit)
@@ -183,7 +188,7 @@ class VideoDecoder {
                     feedDecoder(nalUnit)
 
                     // Drain output
-                    drainDecoder(bufferInfo, nalUnit.timestamp)
+                    drainDecoder(bufferInfo, nalUnit.timestamp, nalUnit.frameNumber)
                 } catch (e: InterruptedException) {
                     break
                 } catch (e: Exception) {
@@ -207,6 +212,9 @@ class VideoDecoder {
         inputBuffer.clear()
         inputBuffer.put(nalUnit.data)
 
+        // Timing: frame being fed to decoder
+        stats?.onDecodeInput(nalUnit.frameNumber)
+
         // Queue to decoder with capture timestamp
         codec.queueInputBuffer(
             inputIndex,
@@ -217,7 +225,7 @@ class VideoDecoder {
         )
     }
 
-    private fun drainDecoder(bufferInfo: MediaCodec.BufferInfo, captureTimestamp: Long) {
+    private fun drainDecoder(bufferInfo: MediaCodec.BufferInfo, captureTimestamp: Long, frameNumber: Int) {
         val codec = codec ?: return
 
         while (true) {
@@ -236,8 +244,14 @@ class VideoDecoder {
                     android.util.Log.i("VideoDecoder", "Output format changed: ${newWidth}x${newHeight}")
                 }
                 outputIndex >= 0 -> {
+                    // Timing: decoder produced output
+                    stats?.onDecodeOutput(frameNumber)
+
                     // Got output frame, release to surface for rendering
                     codec.releaseOutputBuffer(outputIndex, true)
+
+                    // Timing: frame rendered to surface
+                    stats?.onRender(frameNumber)
 
                     // Update stats
                     stats?.onFrameDecoded(captureTimestamp)

@@ -49,6 +49,7 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
     private var statsVisible = false
     private var performanceStats: PerformanceStats? = null
     private var isLogging = false
+    private var isPipelineLogging = false
 
     // Toolbox state
     private var toolboxVisible = false
@@ -215,6 +216,9 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
         // Initialize performance stats
         performanceStats = PerformanceStats(context)
 
+        // Wire up stats to client for network receive timing
+        mirrorClient.stats = performanceStats
+
         // Stats toggle button
         binding.statsToggleButton.setOnClickListener {
             statsVisible = !statsVisible
@@ -299,6 +303,19 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
                 Toast.makeText(context, "Log saved", Toast.LENGTH_SHORT).show()
             }
             updateToolButtonState(binding.toolLog, isLogging)
+        }
+
+        // Pipeline log toggle
+        binding.toolPipelineLog.setOnClickListener {
+            isPipelineLogging = !isPipelineLogging
+            if (isPipelineLogging) {
+                performanceStats?.startPipelineLogging()
+                Toast.makeText(context, "Pipeline logging started", Toast.LENGTH_SHORT).show()
+            } else {
+                performanceStats?.stopPipelineLogging()
+                Toast.makeText(context, "Pipeline log saved", Toast.LENGTH_SHORT).show()
+            }
+            updateToolButtonState(binding.toolPipelineLog, isPipelineLogging)
         }
 
         // Hide/show top bar
@@ -644,6 +661,24 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
                     if (decoder.isHardwareDecoder) 0xFF00FF00.toInt() else 0xFFFF0000.toInt()
                 )
             }
+
+            // Pipeline timing
+            binding.statsPipeline.text = "Net→Q: %.1f | Q: %.1f | Dec: %.1f | Rnd: %.1f".format(
+                stats.avgNetworkToQueue,
+                stats.avgQueueWait,
+                stats.avgDecodeTime,
+                stats.avgDecodeToRender
+            )
+            binding.statsPipelineTotal.text = "Total Android: %.1f ms".format(stats.avgTotalPipeline)
+
+            // Color code pipeline total based on target latency
+            val pipelineColor = when {
+                stats.avgTotalPipeline <= 17 -> 0xFF00FF00.toInt()  // Green - excellent
+                stats.avgTotalPipeline <= 25 -> 0xFF88FF00.toInt()  // Yellow-green - good
+                stats.avgTotalPipeline <= 50 -> 0xFFFFFF00.toInt()  // Yellow - acceptable
+                else -> 0xFFFF0000.toInt()  // Red - too slow
+            }
+            binding.statsPipelineTotal.setTextColor(pipelineColor)
         }
     }
 
@@ -810,7 +845,7 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
     }
 
     private fun handleVideoFrame(frame: VideoFrame) {
-        videoDecoder?.decode(frame.nalData, frame.timestamp, frame.isKeyframe)
+        videoDecoder?.decode(frame.nalData, frame.timestamp, frame.isKeyframe, frame.frameNumber)
     }
 
     private fun initializeDecoder(config: VideoConfig) {
@@ -919,6 +954,7 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
         mirrorClient.release()
         videoDecoder?.release()
         performanceStats?.stopLogging()
+        performanceStats?.stopPipelineLogging()
         performanceStats = null
         _binding = null
     }

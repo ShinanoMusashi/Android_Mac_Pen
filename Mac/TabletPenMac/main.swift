@@ -17,6 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var isDrawingMode = false
     private var wasDown = false
+    private var timingEnabled = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Request accessibility permissions for cursor control
@@ -174,7 +175,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Setup capture callback
         capture.onFrame = { [weak self] pixelBuffer, timestamp in
-            self?.videoEncoder?.encode(pixelBuffer: pixelBuffer, timestamp: timestamp)
+            guard let self = self else { return }
+            // Timing: capture
+            PipelineTimer.shared.onCapture(frameNumber: self.frameNumber, displayTime: timestamp)
+            self.videoEncoder?.encode(pixelBuffer: pixelBuffer, timestamp: timestamp)
         }
 
         // Start capture
@@ -210,6 +214,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func sendVideoFrame(nalData: Data, isKeyframe: Bool, timestamp: UInt64) {
         let frameType: FrameType = isKeyframe ? .keyframe : .deltaFrame
+
+        // Timing: send
+        PipelineTimer.shared.onSend(frameNumber: frameNumber)
+
         server.sendVideoFrame(frameType: frameType, timestamp: timestamp, frameNumber: frameNumber, nalData: nalData)
         frameNumber += 1
     }
@@ -303,6 +311,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Screen recording permission check
         menu.addItem(NSMenuItem(title: "Check Screen Recording Permission", action: #selector(checkScreenPermission), keyEquivalent: ""))
+
+        // Pipeline timing toggle
+        let timingItem = NSMenuItem(title: "Enable Pipeline Timing", action: #selector(toggleTiming), keyEquivalent: "t")
+        timingItem.tag = 400
+        menu.addItem(timingItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -400,6 +413,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func clearCanvas() {
         drawingWindow?.clear()
+    }
+
+    @objc private func toggleTiming() {
+        timingEnabled = !timingEnabled
+
+        if timingEnabled {
+            PipelineTimer.shared.start(logToFile: true)
+        } else {
+            PipelineTimer.shared.stop()
+        }
+
+        // Update menu item
+        if let menu = statusItem.menu, let item = menu.item(withTag: 400) {
+            item.title = timingEnabled ? "Disable Pipeline Timing" : "Enable Pipeline Timing"
+            item.state = timingEnabled ? .on : .off
+        }
     }
 
     @objc private func showIPAddress() {

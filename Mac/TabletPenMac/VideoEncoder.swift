@@ -112,6 +112,9 @@ class VideoEncoder {
         let currentFrameNumber = frameNumber
         frameNumber += 1
 
+        // Timing: encode start
+        PipelineTimer.shared.onEncodeStart(frameNumber: currentFrameNumber)
+
         VTCompressionSessionEncodeFrame(
             session,
             imageBuffer: pixelBuffer,
@@ -156,6 +159,9 @@ class VideoEncoder {
         guard let nalData = extractNALData(from: sampleBuffer, isKeyframe: isKeyframe) else {
             return
         }
+
+        // Timing: encode complete
+        PipelineTimer.shared.onEncodeComplete(frameNumber: frameNumber, nalSize: nalData.count, isKeyframe: isKeyframe)
 
         // Notify callback
         DispatchQueue.main.async {
