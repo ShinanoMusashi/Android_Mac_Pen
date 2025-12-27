@@ -22,8 +22,9 @@ class MirrorClient {
     private var inputStream: DataInputStream? = null
     private var outputStream: DataOutputStream? = null
 
-    // Low-latency UDP for pen data
+    // Low-latency UDP for pen data (WiFi only - adb reverse doesn't support UDP)
     private val udpPenSender = UDPPenSender()
+    private var useUdpForPen = false  // True for WiFi, false for USB
 
     private var receiveJob: Job? = null
     private var sendJob: Job? = null
@@ -34,6 +35,7 @@ class MirrorClient {
     private val sendChannel = Channel<OutgoingMessage>(Channel.CONFLATED)
 
     private sealed class OutgoingMessage {
+        data class PenDataMsg(val data: PenData) : OutgoingMessage()  // Used for TCP fallback (USB)
         data class ModeRequestMsg(val mode: AppMode) : OutgoingMessage()
         data class QualityRequestMsg(val bitrateMbps: Int) : OutgoingMessage()
         data class ROIUpdateMsg(val x: Float, val y: Float, val width: Float, val height: Float) : OutgoingMessage()
@@ -80,8 +82,18 @@ class MirrorClient {
             inputStream = DataInputStream(newSocket.getInputStream())
             outputStream = DataOutputStream(newSocket.getOutputStream())
 
-            // Connect UDP for low-latency pen data (port 9877)
-            udpPenSender.connect(host, 9877)
+            // Detect if using USB (localhost) or WiFi (real IP)
+            // adb reverse only works for TCP, not UDP
+            val isLocalhost = host == "localhost" || host == "127.0.0.1" || host.startsWith("10.0.2.")
+            useUdpForPen = !isLocalhost
+
+            if (useUdpForPen) {
+                // WiFi: Connect UDP for low-latency pen data (port 9877)
+                udpPenSender.connect(host, 9877)
+                android.util.Log.i("MirrorClient", "Using UDP for pen data (WiFi mode)")
+            } else {
+                android.util.Log.i("MirrorClient", "Using TCP for pen data (USB mode - adb reverse doesn't support UDP)")
+            }
 
             isConnected = true
 
@@ -190,12 +202,18 @@ class MirrorClient {
     }
 
     /**
-     * Send pen data to the server via UDP (low-latency path).
+     * Send pen data to the server.
+     * Uses UDP for WiFi (low-latency), TCP for USB (adb reverse compatibility).
      */
     fun sendPenData(penData: PenData) {
         if (!isConnected) return
-        // Send via UDP for lowest latency (fire-and-forget)
-        udpPenSender.sendPenData(penData)
+        if (useUdpForPen) {
+            // WiFi: Send via UDP for lowest latency (fire-and-forget)
+            udpPenSender.sendPenData(penData)
+        } else {
+            // USB: Send via TCP (adb reverse doesn't support UDP)
+            sendChannel.trySend(OutgoingMessage.PenDataMsg(penData))
+        }
     }
 
     private fun startPingLoop() {
@@ -216,8 +234,11 @@ class MirrorClient {
                     if (!isConnected) break
                     val output = outputStream ?: break
 
-                    // Note: Pen data is sent via UDP, not through this TCP loop
                     when (message) {
+                        is OutgoingMessage.PenDataMsg -> {
+                            // TCP fallback for USB (when UDP not available)
+                            ProtocolCodec.writePenData(output, message.data.serialize())
+                        }
                         is OutgoingMessage.ModeRequestMsg -> {
                             ProtocolCodec.writeModeRequest(output, message.mode)
                         }
