@@ -176,9 +176,9 @@ class PenServer {
         switch message.type {
         case .penData:
             if let penData = ProtocolCodec.decodePenData(from: message.payload) {
-                DispatchQueue.main.async {
-                    self.onPenData?(penData)
-                }
+                // Process pen data immediately on network queue for lowest latency
+                // CGWarpMouseCursorPosition is thread-safe
+                self.onPenData?(penData)
             }
 
         case .modeRequest:

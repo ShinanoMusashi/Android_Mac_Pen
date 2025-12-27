@@ -11,22 +11,29 @@ import java.net.Socket
 
 /**
  * Client for screen mirror mode.
- * Handles bidirectional communication: sends pen data, receives video frames.
+ * Handles bidirectional communication: sends pen data (UDP), receives video frames (TCP).
+ *
+ * Architecture:
+ * - TCP port 9876: Video frames, control messages (reliable)
+ * - UDP port 9877: Pen data only (low-latency, fire-and-forget)
  */
 class MirrorClient {
     private var socket: Socket? = null
     private var inputStream: DataInputStream? = null
     private var outputStream: DataOutputStream? = null
 
+    // Low-latency UDP for pen data
+    private val udpPenSender = UDPPenSender()
+
     private var receiveJob: Job? = null
     private var sendJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // Channel for outgoing messages (CONFLATED = keep only latest pen data)
+    // Channel for outgoing messages (CONFLATED = keep only latest)
+    // Note: Pen data now goes via UDP, not through this channel
     private val sendChannel = Channel<OutgoingMessage>(Channel.CONFLATED)
 
     private sealed class OutgoingMessage {
-        data class PenDataMsg(val data: PenData) : OutgoingMessage()
         data class ModeRequestMsg(val mode: AppMode) : OutgoingMessage()
         data class QualityRequestMsg(val bitrateMbps: Int) : OutgoingMessage()
         data class ROIUpdateMsg(val x: Float, val y: Float, val width: Float, val height: Float) : OutgoingMessage()
@@ -58,6 +65,7 @@ class MirrorClient {
 
     /**
      * Connect to the Mac server.
+     * Establishes both TCP (video/control) and UDP (pen data) connections.
      */
     suspend fun connect(host: String, port: Int): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -71,6 +79,10 @@ class MirrorClient {
             socket = newSocket
             inputStream = DataInputStream(newSocket.getInputStream())
             outputStream = DataOutputStream(newSocket.getOutputStream())
+
+            // Connect UDP for low-latency pen data (port 9877)
+            udpPenSender.connect(host, 9877)
+
             isConnected = true
 
             // Start receive and send loops
@@ -104,6 +116,9 @@ class MirrorClient {
         receiveJob = null
         sendJob?.cancel()
         sendJob = null
+
+        // Disconnect UDP
+        udpPenSender.disconnect()
 
         try {
             socket?.close()
@@ -175,12 +190,12 @@ class MirrorClient {
     }
 
     /**
-     * Send pen data to the server.
+     * Send pen data to the server via UDP (low-latency path).
      */
     fun sendPenData(penData: PenData) {
         if (!isConnected) return
-        // Use trySend to avoid blocking - if channel is full, latest data replaces old
-        sendChannel.trySend(OutgoingMessage.PenDataMsg(penData))
+        // Send via UDP for lowest latency (fire-and-forget)
+        udpPenSender.sendPenData(penData)
     }
 
     private fun startPingLoop() {
@@ -201,10 +216,8 @@ class MirrorClient {
                     if (!isConnected) break
                     val output = outputStream ?: break
 
+                    // Note: Pen data is sent via UDP, not through this TCP loop
                     when (message) {
-                        is OutgoingMessage.PenDataMsg -> {
-                            ProtocolCodec.writePenData(output, message.data.serialize())
-                        }
                         is OutgoingMessage.ModeRequestMsg -> {
                             ProtocolCodec.writeModeRequest(output, message.mode)
                         }
@@ -310,6 +323,7 @@ class MirrorClient {
      */
     fun release() {
         disconnect()
+        udpPenSender.release()
         scope.cancel()
     }
 }

@@ -6,6 +6,7 @@ import Foundation
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var server: PenServer!
+    private var udpPenReceiver: UDPPenReceiver!  // Low-latency UDP for pen data
     private var cursorController: CursorController!
     private var drawingWindow: DrawingWindow?
 
@@ -26,20 +27,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Setup components
         cursorController = CursorController()
         server = PenServer(port: 9876)
+        udpPenReceiver = UDPPenReceiver(port: 9877)
 
         // Setup server callbacks
         setupServerCallbacks()
 
+        // Setup UDP receiver callback (low-latency pen data path)
+        udpPenReceiver.onPenData = { [weak self] data in
+            self?.handlePenData(data)
+        }
+
         // Create status bar menu
         setupStatusBar()
 
-        // Start server
+        // Start servers
         server.start()
+        udpPenReceiver.start()
 
         print("===========================================")
         print("  Tablet Pen Server")
         print("===========================================")
-        print("Server running on port 9876")
+        print("TCP server on port 9876 (video/control)")
+        print("UDP server on port 9877 (low-latency pen)")
         print("")
         print("Your Mac's IP addresses:")
         printIPAddresses()
@@ -51,6 +60,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         stopMirroring()
         server.stop()
+        udpPenReceiver.stop()
     }
 
     private func requestAccessibilityPermissions() {
