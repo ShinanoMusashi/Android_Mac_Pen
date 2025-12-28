@@ -135,7 +135,8 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
                 updateConnectionUI(connected)
                 if (connected) {
                     // Send quality request based on connection type
-                    val bitrateMbps = if (useUsbConnection) 50 else 35
+                    // Industry standard: Moonlight 4K = 80-100 Mbps, Parsec LAN = 100+ Mbps
+                    val bitrateMbps = if (useUsbConnection) 100 else 80
                     mirrorClient.requestQuality(bitrateMbps)
                     // Request mirror mode after connection
                     mirrorClient.requestMirrorMode()
