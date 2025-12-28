@@ -156,24 +156,29 @@ class VideoEncoder {
         // Real-time encoding
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
 
-        // Prioritize speed
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
+        // DON'T prioritize speed over quality - we want good quality during fast motion
+        // VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
 
         // Profile: HEVC Main
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_HEVC_Main_AutoLevel)
 
-        // Bitrate
+        // Bitrate - use as average target
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitrate as CFNumber)
 
-        // Data rate limits
-        let dataRateLimits = [bitrate * 2, 1] as CFArray
+        // Data rate limits - allow 4x burst for fast motion (was 2x)
+        // Format: [bytes per second, duration in seconds]
+        let dataRateLimits = [bitrate * 4, 1] as CFArray
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: dataRateLimits)
 
-        // Keyframe interval
+        // Quality setting - maintain reasonable quality even during motion
+        // 0.0 = max compression, 1.0 = max quality
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_Quality, value: 0.7 as CFNumber)
+
+        // Keyframe interval - more frequent during streaming for error recovery
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: keyframeInterval as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 1.0 as CFNumber)
 
-        // No B-frames
+        // No B-frames - critical for low latency
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
 
         // Expected frame rate
