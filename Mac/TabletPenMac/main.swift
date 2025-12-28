@@ -119,7 +119,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         screenCapture?.updateROI(roi)
     }
 
-    private var requestedBitrate: Int = 35_000_000  // Default bitrate
+    // Default bitrate: 80 Mbps (industry standard for 1440p/4K streaming)
+    // Parsec LAN: 100+ Mbps, Moonlight 4K: 80-100 Mbps, Steam 4K: 100+ Mbps
+    private var requestedBitrate: Int = 80_000_000
 
     private func handleQualityRequest(_ bitrateMbps: Int) {
         requestedBitrate = bitrateMbps * 1_000_000
