@@ -20,6 +20,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var wasDown = false
     private var timingEnabled = false
 
+    // Frame pacing - skip frames when encoder is busy
+    private var isEncodingFrame = false
+    private var pendingFrame: (CVPixelBuffer, UInt64)?
+    private let frameLock = NSLock()
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Request accessibility permissions for cursor control
         requestAccessibilityPermissions()
@@ -180,12 +185,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Setup encoder callback
         encoder.onEncodedFrame = { [weak self] nalData, isKeyframe, timestamp in
-            self?.sendVideoFrame(nalData: nalData, isKeyframe: isKeyframe, timestamp: timestamp)
+            guard let self = self else { return }
+            self.sendVideoFrame(nalData: nalData, isKeyframe: isKeyframe, timestamp: timestamp)
+
+            // Frame pacing: check if there's a pending frame to encode
+            self.frameLock.lock()
+            let pending = self.pendingFrame
+            self.pendingFrame = nil
+            if pending == nil {
+                self.isEncodingFrame = false
+            }
+            self.frameLock.unlock()
+
+            // Encode pending frame if any
+            if let (buffer, ts) = pending {
+                PipelineTimer.shared.onCapture(frameNumber: self.frameNumber, displayTime: ts)
+                self.videoEncoder?.encode(pixelBuffer: buffer, timestamp: ts)
+            }
         }
 
-        // Setup capture callback
+        // Setup capture callback with frame pacing
         capture.onFrame = { [weak self] pixelBuffer, timestamp in
             guard let self = self else { return }
+
+            self.frameLock.lock()
+            if self.isEncodingFrame {
+                // Encoder busy - store as pending (replaces previous pending)
+                self.pendingFrame = (pixelBuffer, timestamp)
+                self.frameLock.unlock()
+                return
+            }
+            self.isEncodingFrame = true
+            self.frameLock.unlock()
+
             // Timing: capture
             PipelineTimer.shared.onCapture(frameNumber: self.frameNumber, displayTime: timestamp)
             self.videoEncoder?.encode(pixelBuffer: pixelBuffer, timestamp: timestamp)
@@ -218,6 +250,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         screenCapture = nil
         videoEncoder = nil
         isMirroring = false
+
+        // Reset frame pacing state
+        frameLock.lock()
+        isEncodingFrame = false
+        pendingFrame = nil
+        frameLock.unlock()
 
         print("Screen mirroring stopped")
     }
