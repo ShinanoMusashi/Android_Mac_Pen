@@ -1,6 +1,14 @@
 import Foundation
 import Network
 
+/// Get current time in nanoseconds using monotonic clock.
+/// Uses continuous clock to avoid jumps from system time changes.
+func getCurrentTimeNanos() -> UInt64 {
+    var time = timespec()
+    clock_gettime(CLOCK_MONOTONIC_RAW, &time)
+    return UInt64(time.tv_sec) * 1_000_000_000 + UInt64(time.tv_nsec)
+}
+
 /// TCP server that receives pen data from the Android tablet.
 /// Supports both legacy text protocol and new binary protocol.
 class PenServer {
@@ -203,6 +211,14 @@ class PenServer {
             // Respond with pong
             sendPong()
 
+        case .syncRequest:
+            // Clock synchronization - respond with timing info
+            let t2 = getCurrentTimeNanos()  // Receive time
+            if let t1 = ProtocolCodec.decodeSyncRequest(from: message.payload) {
+                let t3 = getCurrentTimeNanos()  // Send time
+                sendSyncResponse(t1: t1, t2: t2, t3: t3)
+            }
+
         case .roiUpdate:
             if let roi = ProtocolCodec.decodeROI(from: message.payload) {
                 print("ROI update: x=\(roi.x), y=\(roi.y), w=\(roi.width), h=\(roi.height)")
@@ -290,6 +306,15 @@ class PenServer {
     /// Send pong response.
     func sendPong() {
         let data = ProtocolCodec.encodePong()
+        send(data)
+    }
+
+    /// Send sync response for clock synchronization.
+    /// t1: Android's original timestamp (echoed back)
+    /// t2: Mac's receive timestamp
+    /// t3: Mac's send timestamp
+    func sendSyncResponse(t1: UInt64, t2: UInt64, t3: UInt64) {
+        let data = ProtocolCodec.encodeSyncResponse(t1: t1, t2: t2, t3: t3)
         send(data)
     }
 

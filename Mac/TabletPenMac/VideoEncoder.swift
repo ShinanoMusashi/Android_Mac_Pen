@@ -2,6 +2,51 @@ import Foundation
 import VideoToolbox
 import CoreMedia
 import CoreVideo
+import Darwin
+
+/// Set the current thread to realtime priority for time-critical operations.
+/// This is similar to what game streaming apps like Parsec do.
+private func setRealtimeThreadPriority() {
+    // Use THREAD_TIME_CONSTRAINT_POLICY for realtime scheduling
+    var timeConstraint = thread_time_constraint_policy_data_t()
+
+    // Get the conversion factor for nanoseconds to Mach absolute time units
+    var info = mach_timebase_info_data_t()
+    mach_timebase_info(&info)
+    let nanoToAbs = Double(info.denom) / Double(info.numer)
+
+    // For 60fps video, we need frames every ~16.67ms
+    // Set period to 16ms, computation to 8ms (encoding time budget)
+    let periodNs: UInt32 = 16_000_000  // 16ms period
+    let computeNs: UInt32 = 8_000_000  // 8ms compute time
+    let constraintNs: UInt32 = 16_000_000  // 16ms constraint (deadline)
+
+    timeConstraint.period = UInt32(Double(periodNs) * nanoToAbs)
+    timeConstraint.computation = UInt32(Double(computeNs) * nanoToAbs)
+    timeConstraint.constraint = UInt32(Double(constraintNs) * nanoToAbs)
+    timeConstraint.preemptible = 1  // Can be preempted if we exceed budget
+
+    // Calculate policy count: struct size / integer_t size
+    let policyCount = mach_msg_type_number_t(
+        MemoryLayout<thread_time_constraint_policy_data_t>.size / MemoryLayout<integer_t>.size
+    )
+
+    let result = withUnsafeMutablePointer(to: &timeConstraint) { ptr in
+        ptr.withMemoryRebound(to: integer_t.self, capacity: Int(policyCount)) { intPtr in
+            thread_policy_set(
+                pthread_mach_thread_np(pthread_self()),
+                thread_policy_flavor_t(THREAD_TIME_CONSTRAINT_POLICY),
+                intPtr,
+                policyCount
+            )
+        }
+    }
+
+    if result != KERN_SUCCESS {
+        // Fallback to high QoS if realtime fails
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
+    }
+}
 
 /// HEVC video encoder using VideoToolbox with low-latency optimizations.
 /// Optimized for real-time streaming with minimal encoding delay.
@@ -9,6 +54,7 @@ import CoreVideo
 class VideoEncoder {
     private var compressionSession: VTCompressionSession?
     private let encoderQueue = DispatchQueue(label: "VideoEncoder", qos: .userInteractive)
+    private var hasSetThreadPriority = false
 
     private(set) var width: Int = 0
     private(set) var height: Int = 0
@@ -126,6 +172,9 @@ class VideoEncoder {
         // Real-time encoding - CRITICAL
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
 
+        // Disable power efficiency mode - prioritize performance over battery
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaximizePowerEfficiency, value: kCFBooleanFalse)
+
         // Prioritize speed over quality for minimum latency
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
 
@@ -153,8 +202,11 @@ class VideoEncoder {
     }
 
     private func configureHEVCSession(_ session: VTCompressionSession) {
-        // Real-time encoding
+        // Real-time encoding - CRITICAL for low latency
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+
+        // Disable power efficiency mode - prioritize performance over battery
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaximizePowerEfficiency, value: kCFBooleanFalse)
 
         // DON'T prioritize speed over quality - we want good quality during fast motion
         // VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
@@ -213,6 +265,13 @@ class VideoEncoder {
             infoFlagsOut: nil
         ) { [weak self] status, flags, sampleBuffer in
             guard let self = self else { return }
+
+            // Set realtime thread priority on first callback (encoder callback thread)
+            if !self.hasSetThreadPriority {
+                setRealtimeThreadPriority()
+                self.hasSetThreadPriority = true
+                print("🎮 Encoder thread set to realtime priority")
+            }
 
             if status != noErr {
                 print("Encode error: \(status)")
@@ -374,6 +433,7 @@ class VideoEncoder {
         compressionSession = nil
         frameNumber = 0
         lastKeyframeNumber = 0
+        hasSetThreadPriority = false
         print("Video encoder stopped")
     }
 }

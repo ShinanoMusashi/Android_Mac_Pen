@@ -84,6 +84,31 @@ object ProtocolCodec {
     }
 
     /**
+     * Write sync request message for clock synchronization.
+     * @param t1 Android's send timestamp in nanoseconds (System.nanoTime())
+     */
+    fun writeSyncRequest(output: DataOutputStream, t1: Long) {
+        val payload = ByteArray(8)
+        val buffer = ByteBuffer.wrap(payload)
+        buffer.putLong(t1)
+        writeMessage(output, MessageType.SYNC_REQUEST, payload)
+    }
+
+    /**
+     * Parse sync response from payload.
+     * Returns: t1 (echoed), t2 (Mac receive time), t3 (Mac send time)
+     */
+    fun parseSyncResponse(payload: ByteArray): SyncResponse? {
+        if (payload.size < 24) return null
+        val buffer = ByteBuffer.wrap(payload)
+        return SyncResponse(
+            t1 = buffer.long,
+            t2 = buffer.long,
+            t3 = buffer.long
+        )
+    }
+
+    /**
      * Write log data message.
      * Format: filename + newline + file content
      */
@@ -215,3 +240,22 @@ data class VideoFrame(
         return result
     }
 }
+
+/**
+ * Sync response from Mac for clock synchronization.
+ * Used to calculate RTT and clock offset for accurate E2E latency.
+ *
+ * RTT = (T4 - T1) - (T3 - T2)
+ * Clock offset = ((T2 - T1) + (T3 - T4)) / 2
+ *
+ * Where:
+ * - T1 = Android send time (stored locally)
+ * - T2 = Mac receive time
+ * - T3 = Mac send time
+ * - T4 = Android receive time (captured when response arrives)
+ */
+data class SyncResponse(
+    val t1: Long,  // Android's original timestamp (echoed back)
+    val t2: Long,  // Mac's receive timestamp
+    val t3: Long   // Mac's send timestamp
+)

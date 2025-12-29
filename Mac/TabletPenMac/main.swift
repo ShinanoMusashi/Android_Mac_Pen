@@ -26,6 +26,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let frameLock = NSLock()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Enable "game mode" - high performance settings
+        enablePerformanceMode()
+
         // Request accessibility permissions for cursor control
         requestAccessibilityPermissions()
 
@@ -66,6 +69,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stopMirroring()
         server.stop()
         udpPenReceiver.stop()
+    }
+
+    /// Enable high-performance mode similar to game streaming apps.
+    /// - Disables App Nap to prevent throttling
+    /// - Sets high process priority
+    /// - Disables sudden termination
+    private func enablePerformanceMode() {
+        // Disable App Nap - prevents macOS from throttling the app when in background
+        ProcessInfo.processInfo.disableAutomaticTermination("Screen mirroring active")
+        ProcessInfo.processInfo.disableSuddenTermination()
+
+        // Begin activity to prevent App Nap and system sleep during mirroring
+        // .userInitiated is high priority, .latencyCritical prevents power management throttling
+        ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .latencyCritical],
+            reason: "Real-time screen mirroring"
+        )
+
+        // Set high process priority (nice value -10, needs root for lower)
+        // This helps but isn't as aggressive as realtime threads
+        setpriority(PRIO_PROCESS, 0, -10)
+
+        print("🎮 Performance mode enabled (App Nap disabled, high priority)")
     }
 
     private func requestAccessibilityPermissions() {

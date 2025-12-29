@@ -41,13 +41,18 @@ class MirrorClient {
         data class ROIUpdateMsg(val x: Float, val y: Float, val width: Float, val height: Float) : OutgoingMessage()
         data class LogDataMsg(val filename: String, val content: String) : OutgoingMessage()
         object PingMsg : OutgoingMessage()
+        data class SyncRequestMsg(val t1: Long) : OutgoingMessage()  // Clock sync
     }
 
     @Volatile
     var isConnected = false
         private set
 
-    // Latency measurement
+    // Clock synchronization for accurate E2E latency
+    val clockSync = ClockSync()
+    private var syncJob: Job? = null
+
+    // Latency measurement (deprecated - use clockSync.rttMs instead)
     private var pingJob: Job? = null
     private var lastPingTime = 0L
     @Volatile
@@ -101,6 +106,7 @@ class MirrorClient {
             startReceiveLoop()
             startSendLoop()
             startPingLoop()
+            startSyncLoop()
 
             withContext(Dispatchers.Main) {
                 onConnectionChanged?.invoke(true)
@@ -124,10 +130,15 @@ class MirrorClient {
 
         pingJob?.cancel()
         pingJob = null
+        syncJob?.cancel()
+        syncJob = null
         receiveJob?.cancel()
         receiveJob = null
         sendJob?.cancel()
         sendJob = null
+
+        // Reset clock synchronization
+        clockSync.reset()
 
         // Disconnect UDP
         udpPenSender.disconnect()
@@ -227,6 +238,22 @@ class MirrorClient {
         }
     }
 
+    private fun startSyncLoop() {
+        syncJob = scope.launch {
+            // Initial delay to let connection stabilize
+            delay(500)
+
+            while (isActive && isConnected) {
+                // Send sync request with current timestamp
+                val t1 = System.nanoTime()
+                sendChannel.trySend(OutgoingMessage.SyncRequestMsg(t1))
+
+                // Sync every 2 seconds (less frequent than ping since we use EMA)
+                delay(2000)
+            }
+        }
+    }
+
     private fun startSendLoop() {
         sendJob = scope.launch {
             try {
@@ -254,6 +281,9 @@ class MirrorClient {
                         is OutgoingMessage.PingMsg -> {
                             lastPingTime = System.currentTimeMillis()
                             ProtocolCodec.writePing(output)
+                        }
+                        is OutgoingMessage.SyncRequestMsg -> {
+                            ProtocolCodec.writeSyncRequest(output, message.t1)
                         }
                     }
                 }
@@ -320,6 +350,14 @@ class MirrorClient {
                     withContext(Dispatchers.Main) {
                         onLatencyUpdate?.invoke(currentLatency)
                     }
+                }
+            }
+
+            MessageType.SYNC_RESPONSE -> {
+                // Process clock synchronization response
+                val t4 = System.nanoTime()  // Receive timestamp
+                ProtocolCodec.parseSyncResponse(message.payload)?.let { response ->
+                    clockSync.processSyncResponse(response.t1, response.t2, response.t3, t4)
                 }
             }
 

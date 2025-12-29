@@ -21,7 +21,11 @@ enum class MessageType(val value: Byte) {
 
     // Bidirectional
     PING(0xF0.toByte()),
-    PONG(0xF1.toByte());
+    PONG(0xF1.toByte()),
+
+    // Clock synchronization (for accurate E2E latency measurement)
+    SYNC_REQUEST(0xF2.toByte()),   // Android -> Mac: [T1: 8 bytes] (Android's send timestamp nanos)
+    SYNC_RESPONSE(0xF3.toByte());  // Mac -> Android: [T1: 8 bytes][T2: 8 bytes][T3: 8 bytes]
 
     companion object {
         fun fromValue(value: Byte): MessageType? {

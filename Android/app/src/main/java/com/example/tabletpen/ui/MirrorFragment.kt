@@ -220,6 +220,9 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
         // Wire up stats to client for network receive timing
         mirrorClient.stats = performanceStats
 
+        // Wire up clock sync for RTT display
+        performanceStats?.clockSync = mirrorClient.clockSync
+
         // Wire up log transfer callback - sends log to Mac when stopped
         performanceStats?.onPipelineLogReady = { filename, content ->
             mirrorClient.sendLogData(filename, content)
@@ -246,10 +249,13 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
             }
         }
 
-        // Network latency callback (ping RTT)
+        // Network latency callback (ping RTT - deprecated, use clock sync)
         mirrorClient.onLatencyUpdate = { latency ->
             activity?.runOnUiThread {
-                updateNetworkLatencyDisplay(latency)
+                // Only show ping RTT if clock sync not ready yet
+                if (!mirrorClient.clockSync.isSynced) {
+                    updateNetworkLatencyDisplay(latency)
+                }
             }
         }
     }
@@ -609,7 +615,13 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
 
     private fun updateNetworkLatencyDisplay(latency: Long) {
         if (_binding == null) return
-        binding.statsNetwork.text = "Net RTT: ${latency}ms"
+        // Show clock sync RTT if available (more accurate), otherwise ping RTT
+        val clockSync = mirrorClient.clockSync
+        if (clockSync.isSynced) {
+            binding.statsNetwork.text = "RTT: %.1fms (synced)".format(clockSync.rttMs)
+        } else {
+            binding.statsNetwork.text = "RTT: ${latency}ms (ping)"
+        }
     }
 
     private fun updateStatsDisplay(stats: PerformanceStats) {
@@ -676,6 +688,12 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
                 stats.avgDecodeToRender
             )
             binding.statsPipelineTotal.text = "Total Android: %.1f ms".format(stats.avgTotalPipeline)
+
+            // Update RTT from clock sync
+            val clockSync = mirrorClient.clockSync
+            if (clockSync.isSynced) {
+                binding.statsNetwork.text = "RTT: %.1fms (synced)".format(clockSync.rttMs)
+            }
 
             // Color code pipeline total based on target latency
             val pipelineColor = when {

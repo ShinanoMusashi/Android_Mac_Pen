@@ -64,6 +64,9 @@ class PerformanceStats(private val context: Context? = null) {
     var decodedWidth = 0
     var decodedHeight = 0
 
+    // Clock sync reference for RTT display
+    var clockSync: ClockSync? = null
+
     // Logging
     private var logWriter: FileWriter? = null
     private var loggingEnabled = false
@@ -442,7 +445,15 @@ class PerformanceStats(private val context: Context? = null) {
     fun getStatsString(): String {
         return buildString {
             appendLine("FPS: %.1f (1%%: %.1f, 5%%: %.1f)".format(currentFps, onePercentLow, fivePercentLow))
-            appendLine("Latency: ${avgLatency}ms (max: ${maxLatency}ms)")
+
+            // RTT from clock sync (network round-trip)
+            val sync = clockSync
+            if (sync != null && sync.isSynced) {
+                appendLine("RTT: %.1fms | Pipeline: ${avgLatency}ms".format(sync.rttMs))
+            } else {
+                appendLine("Latency: ${avgLatency}ms (max: ${maxLatency}ms)")
+            }
+
             appendLine("Resolution: ${sourceWidth}x${sourceHeight}")
             appendLine("Queue: $queueDepth | Dropped: $totalFramesDropped")
             appendLine("Frame time: %.1fms".format(avgFrameTime))

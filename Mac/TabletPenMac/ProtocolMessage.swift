@@ -20,6 +20,13 @@ enum MessageType: UInt8 {
     // Bidirectional
     case ping = 0xF0
     case pong = 0xF1
+
+    // Clock synchronization (for accurate E2E latency measurement)
+    case syncRequest = 0xF2   // Android -> Mac: [T1: 8 bytes] (Android's send timestamp)
+    case syncResponse = 0xF3  // Mac -> Android: [T1: 8 bytes][T2: 8 bytes][T3: 8 bytes]
+                              // T1 = Android's original timestamp (echo)
+                              // T2 = Mac's receive timestamp
+                              // T3 = Mac's send timestamp
 }
 
 /// Mode identifiers for MODE_REQUEST and MODE_ACK messages.
@@ -168,6 +175,24 @@ class ProtocolCodec {
         return ProtocolMessage(type: .pong, payload: Data()).serialize()
     }
 
+    /// Create a sync response message.
+    /// T1 = Android's original timestamp (echoed back)
+    /// T2 = Mac's receive timestamp (nanoseconds)
+    /// T3 = Mac's send timestamp (nanoseconds)
+    static func encodeSyncResponse(t1: UInt64, t2: UInt64, t3: UInt64) -> Data {
+        var payload = Data()
+
+        var t1BE = t1.bigEndian
+        var t2BE = t2.bigEndian
+        var t3BE = t3.bigEndian
+
+        payload.append(Data(bytes: &t1BE, count: 8))
+        payload.append(Data(bytes: &t2BE, count: 8))
+        payload.append(Data(bytes: &t3BE, count: 8))
+
+        return ProtocolMessage(type: .syncResponse, payload: payload).serialize()
+    }
+
     // MARK: - Decoding
 
     /// Parse pen data from payload.
@@ -212,5 +237,21 @@ class ProtocolCodec {
         let height = parseFloat(at: 12)
 
         return RegionOfInterest(x: x, y: y, width: width, height: height)
+    }
+
+    /// Parse sync request from payload.
+    /// Returns T1 (Android's send timestamp in nanoseconds).
+    static func decodeSyncRequest(from payload: Data) -> UInt64? {
+        guard payload.count >= 8 else { return nil }
+        let bytes = Array(payload.prefix(8))
+        let t1 = UInt64(bytes[0]) << 56 |
+                 UInt64(bytes[1]) << 48 |
+                 UInt64(bytes[2]) << 40 |
+                 UInt64(bytes[3]) << 32 |
+                 UInt64(bytes[4]) << 24 |
+                 UInt64(bytes[5]) << 16 |
+                 UInt64(bytes[6]) << 8 |
+                 UInt64(bytes[7])
+        return t1
     }
 }
