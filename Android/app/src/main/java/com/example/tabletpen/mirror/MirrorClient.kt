@@ -26,6 +26,10 @@ class MirrorClient {
     private val udpPenSender = UDPPenSender()
     private var useUdpForPen = false  // True for WiFi, false for USB
 
+    // Low-latency UDP for video frames (WiFi only)
+    private val udpVideoReceiver = UDPVideoReceiver(port = 9878)
+    private var useUdpForVideo = false
+
     private var receiveJob: Job? = null
     private var sendJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -91,6 +95,7 @@ class MirrorClient {
             // adb reverse only works for TCP, not UDP
             val isLocalhost = host == "localhost" || host == "127.0.0.1" || host.startsWith("10.0.2.")
             useUdpForPen = !isLocalhost
+            useUdpForVideo = !isLocalhost
 
             if (useUdpForPen) {
                 // WiFi: Connect UDP for low-latency pen data (port 9877)
@@ -98,6 +103,15 @@ class MirrorClient {
                 android.util.Log.i("MirrorClient", "Using UDP for pen data (WiFi mode)")
             } else {
                 android.util.Log.i("MirrorClient", "Using TCP for pen data (USB mode - adb reverse doesn't support UDP)")
+            }
+
+            if (useUdpForVideo) {
+                // WiFi: Start UDP video receiver (port 9878)
+                setupUdpVideoReceiver()
+                udpVideoReceiver.start()
+                android.util.Log.i("MirrorClient", "Using UDP for video (WiFi mode)")
+            } else {
+                android.util.Log.i("MirrorClient", "Using TCP for video (USB mode)")
             }
 
             isConnected = true
@@ -142,6 +156,7 @@ class MirrorClient {
 
         // Disconnect UDP
         udpPenSender.disconnect()
+        udpVideoReceiver.stop()
 
         try {
             socket?.close()
@@ -251,6 +266,27 @@ class MirrorClient {
                 // Sync every 2 seconds (less frequent than ping since we use EMA)
                 delay(2000)
             }
+        }
+    }
+
+    private fun setupUdpVideoReceiver() {
+        udpVideoReceiver.onVideoFrame = { nalData, frameNumber, isKeyframe, timestamp ->
+            // Record network receive timing
+            stats?.onNetworkReceive(frameNumber, nalData.size, isKeyframe)
+
+            // Create VideoFrame and forward to callback
+            val frame = VideoFrame(
+                frameType = if (isKeyframe) FrameType.KEYFRAME else FrameType.DELTA_FRAME,
+                timestamp = timestamp,
+                frameNumber = frameNumber,
+                nalData = nalData
+            )
+            onVideoFrame?.invoke(frame)
+        }
+
+        udpVideoReceiver.onPacketLoss = { expectedFrame, receivedFrame ->
+            android.util.Log.w("MirrorClient", "Packet loss detected: expected $expectedFrame, got $receivedFrame")
+            // TODO: Request keyframe on packet loss
         }
     }
 

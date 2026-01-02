@@ -7,14 +7,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var server: PenServer!
     private var udpPenReceiver: UDPPenReceiver!  // Low-latency UDP for pen data
+    private var udpVideoSender: UDPVideoSender!  // Low-latency UDP for video frames
     private var cursorController: CursorController!
     private var drawingWindow: DrawingWindow?
 
     // Screen mirroring components
-    private var screenCapture: ScreenCapture?
+    private var screenCapture: ModernScreenCapture?
     private var videoEncoder: VideoEncoder?
     private var isMirroring = false
     private var frameNumber: UInt32 = 0
+    private var clientHost: String?  // Connected client's IP for UDP video
+
+    // Loopback test components (encode → decode on Mac to compare with Android)
+    private var videoDecoder: VideoDecoder?
+    private var previewWindow: PreviewWindow?
+    private var loopbackEnabled = false
 
     private var isDrawingMode = false
     private var wasDown = false
@@ -36,6 +43,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         cursorController = CursorController()
         server = PenServer(port: 9876)
         udpPenReceiver = UDPPenReceiver(port: 9877)
+        udpVideoSender = UDPVideoSender()
 
         // Setup server callbacks
         setupServerCallbacks()
@@ -111,11 +119,50 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupServerCallbacks() {
         server.onClientConnected = { [weak self] address in
             print("✅ Client connected: \(address)")
+            // Extract IP address from various formats:
+            // - "192.168.1.100"
+            // - "::ffff:192.168.1.100" (IPv4-mapped IPv6)
+            // - "%en0.192.168.1.100" (interface-scoped)
+            var ip = address
+
+            // Remove interface prefix (e.g., "%en0.")
+            if let dotIndex = ip.firstIndex(of: "."), let percentIndex = ip.firstIndex(of: "%") {
+                if percentIndex < dotIndex {
+                    ip = String(ip[ip.index(after: ip.firstIndex(of: ".")!)...])
+                }
+            }
+
+            // Handle IPv4-mapped IPv6 (::ffff:x.x.x.x)
+            if ip.hasPrefix("::ffff:") {
+                ip = String(ip.dropFirst(7))
+            }
+
+            // Remove any remaining colons (IPv6 artifacts)
+            if ip.contains(":") {
+                // Try to extract IPv4 from the end
+                let parts = ip.split(separator: ":")
+                if let lastPart = parts.last, lastPart.contains(".") {
+                    ip = String(lastPart)
+                }
+            }
+
+            // Validate it looks like an IPv4 address
+            let ipParts = ip.split(separator: ".")
+            if ipParts.count == 4 {
+                self?.clientHost = ip
+                print("📡 Client IP for UDP video: \(ip)")
+            } else {
+                print("⚠️  Could not parse client IP from: \(address)")
+                self?.clientHost = nil
+            }
+
             self?.updateStatusIcon(connected: true)
         }
 
         server.onClientDisconnected = { [weak self] in
             print("❌ Client disconnected")
+            self?.clientHost = nil
+            self?.udpVideoSender.disconnect()
             self?.updateStatusIcon(connected: false)
             self?.stopMirroring()
         }
@@ -180,16 +227,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard !isMirroring else { return }
 
         // Check screen recording permission
-        guard ScreenCapture.hasScreenRecordingPermission() else {
+        guard ModernScreenCapture.hasScreenRecordingPermission() else {
             print("⚠️  Screen Recording permission required!")
             print("   Please grant access in:")
             print("   System Preferences → Security & Privacy → Privacy → Screen Recording")
-            ScreenCapture.requestScreenRecordingPermission()
+            ModernScreenCapture.requestScreenRecordingPermission()
             return
         }
 
         // Get screen size and calculate output resolution
-        let capture = ScreenCapture()
+        let capture = ModernScreenCapture()
         let nativeSize = capture.nativeScreenSize
 
         // For USB connection, use higher resolution (up to 1440p)
@@ -258,8 +305,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Send video config to client
+        // Send video config to client (via TCP)
         server.sendVideoConfig(width: outputWidth, height: outputHeight, fps: fps, bitrate: bitrate)
+
+        // Connect UDP video sender to client
+        if let host = clientHost {
+            udpVideoSender.connect(host: host, port: 9878)
+            print("📺 UDP video sender connected to \(host):9878")
+        } else {
+            print("⚠️  No client IP for UDP video, falling back to TCP")
+        }
+
+        // Setup loopback decoder if enabled
+        if loopbackEnabled {
+            let decoder = VideoDecoder()
+            decoder.initialize(width: outputWidth, height: outputHeight, isHEVC: true)
+            decoder.onDecodedFrame = { [weak self] pixelBuffer, timestamp in
+                self?.previewWindow?.displayFrame(pixelBuffer, timestamp: timestamp)
+            }
+            videoDecoder = decoder
+            print("🔄 Loopback decoder ready")
+        }
 
         screenCapture = capture
         videoEncoder = encoder
@@ -274,9 +340,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         screenCapture?.stop()
         videoEncoder?.stop()
+        videoDecoder?.stop()
+        udpVideoSender.disconnect()
 
         screenCapture = nil
         videoEncoder = nil
+        videoDecoder = nil
         isMirroring = false
 
         // Reset frame pacing state
@@ -289,12 +358,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func sendVideoFrame(nalData: Data, isKeyframe: Bool, timestamp: UInt64) {
-        let frameType: FrameType = isKeyframe ? .keyframe : .deltaFrame
-
         // Timing: send
         PipelineTimer.shared.onSend(frameNumber: frameNumber)
 
-        server.sendVideoFrame(frameType: frameType, timestamp: timestamp, frameNumber: frameNumber, nalData: nalData)
+        // Send via UDP for lower latency (with TCP fallback)
+        if clientHost != nil {
+            // UDP: fragmented video packets
+            udpVideoSender.sendFrame(
+                nalData: nalData,
+                frameNumber: frameNumber,
+                isKeyframe: isKeyframe,
+                timestamp: timestamp
+            )
+        } else {
+            // TCP fallback
+            let frameType: FrameType = isKeyframe ? .keyframe : .deltaFrame
+            server.sendVideoFrame(frameType: frameType, timestamp: timestamp, frameNumber: frameNumber, nalData: nalData)
+        }
+
+        // Loopback test: decode on Mac and display in preview window
+        if loopbackEnabled {
+            videoDecoder?.decode(nalData: nalData, timestamp: timestamp)
+        }
+
         frameNumber += 1
     }
 
@@ -392,6 +478,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let timingItem = NSMenuItem(title: "Enable Pipeline Timing", action: #selector(toggleTiming), keyEquivalent: "t")
         timingItem.tag = 400
         menu.addItem(timingItem)
+
+        // Loopback test toggle
+        let loopbackItem = NSMenuItem(title: "Enable Loopback Preview", action: #selector(toggleLoopback), keyEquivalent: "l")
+        loopbackItem.tag = 401
+        menu.addItem(loopbackItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -504,6 +595,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let menu = statusItem.menu, let item = menu.item(withTag: 400) {
             item.title = timingEnabled ? "Disable Pipeline Timing" : "Enable Pipeline Timing"
             item.state = timingEnabled ? .on : .off
+        }
+    }
+
+    @objc private func toggleLoopback() {
+        loopbackEnabled = !loopbackEnabled
+
+        if loopbackEnabled {
+            // Create preview window if needed
+            if previewWindow == nil {
+                previewWindow = PreviewWindow()
+            }
+            previewWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            print("🔄 Loopback preview enabled - compare with Android playback")
+        } else {
+            previewWindow?.close()
+            videoDecoder?.stop()
+            videoDecoder = nil
+            print("🔄 Loopback preview disabled")
+        }
+
+        // Update menu item
+        if let menu = statusItem.menu, let item = menu.item(withTag: 401) {
+            item.title = loopbackEnabled ? "Disable Loopback Preview" : "Enable Loopback Preview"
+            item.state = loopbackEnabled ? .on : .off
         }
     }
 

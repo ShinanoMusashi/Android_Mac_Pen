@@ -59,7 +59,7 @@ class VideoEncoder {
     private(set) var width: Int = 0
     private(set) var height: Int = 0
     private(set) var fps: Int = 30
-    private(set) var bitrate: Int = 4_000_000  // 4 Mbps default
+    private(set) var bitrate: Int = 8_000_000  // 8 Mbps default (higher quality)
     private(set) var useHEVC: Bool = true  // Track codec type
     private(set) var encoderName: String = "unknown"
 
@@ -127,10 +127,11 @@ class VideoEncoder {
     }
 
     private func initializeHEVC() -> Bool {
-        // Require hardware encoder and enable low-latency
+        // Require hardware encoder and enable low-latency rate control
         let encoderSpec: [CFString: Any] = [
             kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true,
-            kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true
+            kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true,
+            kVTVideoEncoderSpecification_EnableLowLatencyRateControl: true  // Critical for streaming!
         ]
 
         var session: VTCompressionSession?
@@ -165,6 +166,7 @@ class VideoEncoder {
 
         print("HEVC encoder initialized: \(width)x\(height) @ \(fps)fps, \(bitrate/1_000_000)Mbps")
         print("Encoder: \(encoderName)")
+        print("🚀 LOW-LATENCY mode enabled (speed prioritized over quality)")
         return true
     }
 
@@ -208,8 +210,8 @@ class VideoEncoder {
         // Disable power efficiency mode - prioritize performance over battery
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaximizePowerEfficiency, value: kCFBooleanFalse)
 
-        // DON'T prioritize speed over quality - we want good quality during fast motion
-        // VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
+        // Prioritize encoding SPEED - we need 60fps, quality is secondary
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
 
         // Profile: HEVC Main
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_HEVC_Main_AutoLevel)
@@ -217,14 +219,14 @@ class VideoEncoder {
         // Bitrate - use as average target
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitrate as CFNumber)
 
-        // Data rate limits - allow 4x burst for fast motion (was 2x)
+        // Data rate limits - allow 2x burst (reduced from 4x to help encoder keep up)
         // Format: [bytes per second, duration in seconds]
-        let dataRateLimits = [bitrate * 4, 1] as CFArray
+        let dataRateLimits = [bitrate * 2, 1] as CFArray
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: dataRateLimits)
 
-        // Quality setting - maintain reasonable quality even during motion
+        // Quality setting - balanced for good quality at 60fps
         // 0.0 = max compression, 1.0 = max quality
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_Quality, value: 0.7 as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_Quality, value: 0.75 as CFNumber)
 
         // Keyframe interval - more frequent during streaming for error recovery
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: keyframeInterval as CFNumber)

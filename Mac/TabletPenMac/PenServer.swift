@@ -42,8 +42,15 @@ class PenServer {
     /// Start listening for connections.
     func start() {
         do {
-            let parameters = NWParameters.tcp
+            // Configure TCP for low latency
+            let tcpOptions = NWProtocolTCP.Options()
+            tcpOptions.noDelay = true  // Disable Nagle's algorithm
+            tcpOptions.enableFastOpen = true  // TCP Fast Open
+            tcpOptions.connectionTimeout = 5  // Quick connection timeout
+
+            let parameters = NWParameters(tls: nil, tcp: tcpOptions)
             parameters.allowLocalEndpointReuse = true
+            parameters.serviceClass = .interactiveVideo  // High priority
 
             listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
 
@@ -334,6 +341,11 @@ class PenServer {
     private func send(_ data: Data) {
         connection?.send(content: data, completion: .contentProcessed { [weak self] error in
             if let error = error {
+                // Suppress ECANCELED errors (expected during disconnect)
+                let nsError = error as NSError
+                if nsError.domain == NSPOSIXErrorDomain && nsError.code == 89 {
+                    return  // ECANCELED - ignore
+                }
                 DispatchQueue.main.async {
                     self?.onError?("Send error: \(error)")
                 }
