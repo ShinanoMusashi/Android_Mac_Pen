@@ -109,6 +109,13 @@ object ProtocolCodec {
     }
 
     /**
+     * Write video fallback request (ask Mac to send video via TCP instead of UDP).
+     */
+    fun writeVideoFallback(output: DataOutputStream) {
+        writeMessage(output, MessageType.VIDEO_FALLBACK, ByteArray(0))
+    }
+
+    /**
      * Write log data message.
      * Format: filename + newline + file content
      */

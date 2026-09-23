@@ -26,6 +26,11 @@ class PenServer {
     // Protocol detection: true = binary, false = legacy text
     private var useBinaryProtocol = false
 
+    // Called once a video frame has fully drained to the socket. Lets the caller
+    // pace encoding to the link so latency stays bounded — without dropping already
+    // encoded delta frames (which breaks the reference chain and corrupts the image).
+    var onVideoFrameSent: (() -> Void)?
+
     // Callbacks
     var onPenData: ((PenData) -> Void)?
     var onClientConnected: ((String) -> Void)?
@@ -34,6 +39,7 @@ class PenServer {
     var onModeRequest: ((AppMode) -> Void)?
     var onQualityRequest: ((Int) -> Void)?  // Bitrate in Mbps
     var onROIUpdate: ((RegionOfInterest) -> Void)?  // Region of interest for zoomed streaming
+    var onVideoFallback: (() -> Void)?  // Client requests TCP video (UDP unreachable)
 
     init(port: UInt16 = 9876) {
         self.port = port
@@ -238,6 +244,13 @@ class PenServer {
             // Save received log data to file
             saveLogData(message.payload)
 
+        case .videoFallback:
+            // Client reports UDP video is unreachable, switch to TCP
+            print("📡 Client requested TCP video fallback (UDP unreachable)")
+            DispatchQueue.main.async {
+                self.onVideoFallback?()
+            }
+
         default:
             // Ignore other message types from client
             break
@@ -331,10 +344,24 @@ class PenServer {
         send(data)
     }
 
-    /// Send video frame.
+    /// Send video frame, invoking `onVideoFrameSent` once it has fully drained to
+    /// the socket so the caller can pace the next encode to the link.
     func sendVideoFrame(frameType: FrameType, timestamp: UInt64, frameNumber: UInt32, nalData: Data) {
+        guard let connection = connection else {
+            onVideoFrameSent?()  // no client; don't stall the pipeline
+            return
+        }
         let data = ProtocolCodec.encodeVideoFrame(frameType: frameType, timestamp: timestamp, frameNumber: frameNumber, nalData: nalData)
-        send(data)
+        connection.send(content: data, completion: .contentProcessed { [weak self] error in
+            guard let self = self else { return }
+            if let error = error {
+                let nsError = error as NSError
+                if !(nsError.domain == NSPOSIXErrorDomain && nsError.code == 89) {
+                    DispatchQueue.main.async { self.onError?("Send error: \(error)") }
+                }
+            }
+            self.onVideoFrameSent?()
+        })
     }
 
     /// Send raw data to client.

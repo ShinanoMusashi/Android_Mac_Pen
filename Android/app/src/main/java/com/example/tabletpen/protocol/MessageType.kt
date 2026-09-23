@@ -19,6 +19,9 @@ enum class MessageType(val value: Byte) {
     VIDEO_FRAME(0x10),
     VIDEO_CONFIG(0x11),
 
+    // Android -> Mac: request TCP fallback for video (UDP not reachable)
+    VIDEO_FALLBACK(0x12),
+
     // Bidirectional
     PING(0xF0.toByte()),
     PONG(0xF1.toByte()),

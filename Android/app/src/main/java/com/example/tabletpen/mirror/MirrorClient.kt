@@ -46,6 +46,7 @@ class MirrorClient {
         data class LogDataMsg(val filename: String, val content: String) : OutgoingMessage()
         object PingMsg : OutgoingMessage()
         data class SyncRequestMsg(val t1: Long) : OutgoingMessage()  // Clock sync
+        object VideoFallbackMsg : OutgoingMessage()  // Request TCP video
     }
 
     @Volatile
@@ -55,6 +56,9 @@ class MirrorClient {
     // Clock synchronization for accurate E2E latency
     val clockSync = ClockSync()
     private var syncJob: Job? = null
+    private var udpVideoFallbackJob: Job? = null
+    @Volatile
+    private var useTcpVideoFallback = false
 
     // Latency measurement (deprecated - use clockSync.rttMs instead)
     private var pingJob: Job? = null
@@ -121,6 +125,7 @@ class MirrorClient {
             startSendLoop()
             startPingLoop()
             startSyncLoop()
+            startUdpVideoFallbackMonitor()
 
             withContext(Dispatchers.Main) {
                 onConnectionChanged?.invoke(true)
@@ -146,12 +151,15 @@ class MirrorClient {
         pingJob = null
         syncJob?.cancel()
         syncJob = null
+        udpVideoFallbackJob?.cancel()
+        udpVideoFallbackJob = null
         receiveJob?.cancel()
         receiveJob = null
         sendJob?.cancel()
         sendJob = null
 
-        // Reset clock synchronization
+        // Reset state
+        useTcpVideoFallback = false
         clockSync.reset()
 
         // Disconnect UDP
@@ -269,6 +277,42 @@ class MirrorClient {
         }
     }
 
+    /**
+     * Start monitoring UDP video reception.
+     * If no UDP video frames arrive within 3 seconds, request TCP fallback.
+     */
+    private fun startUdpVideoFallbackMonitor() {
+        if (!useUdpForVideo) return
+
+        udpVideoFallbackJob = scope.launch {
+            // Wait 3 seconds to give UDP a chance
+            delay(3000)
+
+            if (!isConnected || useTcpVideoFallback) return@launch
+
+            if (udpVideoReceiver.framesReceived == 0L) {
+                android.util.Log.w("MirrorClient",
+                    "No UDP video frames received after 3s - requesting TCP fallback " +
+                    "(UDP packets=${udpVideoReceiver.packetsReceived})")
+
+                useTcpVideoFallback = true
+
+                // Stop the UDP receiver since it's not getting anything
+                udpVideoReceiver.stop()
+
+                // Ask the Mac to send video via TCP instead
+                sendChannel.trySend(OutgoingMessage.VideoFallbackMsg)
+
+                withContext(Dispatchers.Main) {
+                    onError?.invoke("UDP video unreachable, switched to TCP")
+                }
+            } else {
+                android.util.Log.i("MirrorClient",
+                    "UDP video working: ${udpVideoReceiver.framesReceived} frames received")
+            }
+        }
+    }
+
     private fun setupUdpVideoReceiver() {
         udpVideoReceiver.onVideoFrame = { nalData, frameNumber, isKeyframe, timestamp ->
             // Record network receive timing
@@ -320,6 +364,9 @@ class MirrorClient {
                         }
                         is OutgoingMessage.SyncRequestMsg -> {
                             ProtocolCodec.writeSyncRequest(output, message.t1)
+                        }
+                        is OutgoingMessage.VideoFallbackMsg -> {
+                            ProtocolCodec.writeVideoFallback(output)
                         }
                     }
                 }

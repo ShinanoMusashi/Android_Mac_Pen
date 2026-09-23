@@ -1,6 +1,37 @@
 # Session Status - Android Mac Pen
 
-**Last Updated**: 2025-12-30 (Session 2)
+**Last Updated**: 2026-09-23 (Session 3)
+
+---
+
+## Most Recent Session (2026-09-23 - Session 3)
+
+**Focus**: Reviving the Mac side + fixing USB mirror video, then latency/quality tuning.
+
+**Environment setup (Mac side)**:
+- Build/run via `Mac/bundle.sh` → produces `Mac/TabletPenMac.app` (ad-hoc signed).
+  The `.app` bundle is REQUIRED — a bare SwiftPM binary can't hold a Screen Recording grant.
+- Screen Recording permission must be granted to `TabletPenMac.app` (System Settings → Privacy).
+- USB mode needs `adb reverse tcp:9876 tcp:9876` and `adb reverse tcp:9877 tcp:9877`
+  (re-run after every replug / adb restart). Android USB toggle → connects to 127.0.0.1.
+
+**Bugs fixed**:
+- USB video was black: Mac sent video via UDP to 127.0.0.1 (loops back). Now auto-forces
+  TCP video for loopback clients (`main.swift`, in the client-connect handler).
+- Encoder failed every frame with -12905 on the 16" MBP (1728x1117): odd height. Now rounds
+  output dimensions down to even (`main.swift`).
+
+**Latency/quality work**:
+- Network-paced pipeline: encode is gated on send-drain; stale frames dropped at the CAPTURE
+  input (never post-encode → no more delta-chain corruption). See `encodeNextFrameIfReady()`.
+- Pipeline depth = 2 (`maxFramesInFlight`) to absorb adb-tunnel jitter (motion stutter).
+- Keyframe interval 1s → 5s (fewer big I-frame bursts; TCP is lossless so recovery not needed).
+- USB bitrate capped on Mac side (`usbBitrateCapMbps`, currently 70). Measured USB link:
+  USB 2.0, ~258 Mbps real throughput — bandwidth is NOT the limiter, jitter is.
+
+**Status**: USB mirror works well. Minor: brief color blocks at connect until first keyframe.
+
+**Uncommitted**: all Session 3 Mac changes + earlier WIP are unstaged (see `git status`).
 
 ---
 

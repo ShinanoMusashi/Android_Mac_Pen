@@ -16,6 +16,7 @@ Mac/.swiftpm/
 Mac/*.xcodeproj/
 Mac/*.xcworkspace/
 Mac/DerivedData/
+Mac/*.app/
 
 # General
 .DS_Store

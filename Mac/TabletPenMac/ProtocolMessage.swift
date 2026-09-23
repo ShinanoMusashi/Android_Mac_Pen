@@ -17,6 +17,9 @@ enum MessageType: UInt8 {
     case videoFrame = 0x10
     case videoConfig = 0x11
 
+    // Android -> Mac: request TCP fallback for video (UDP not reachable)
+    case videoFallback = 0x12
+
     // Bidirectional
     case ping = 0xF0
     case pong = 0xF1

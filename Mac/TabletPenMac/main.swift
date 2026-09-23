@@ -17,6 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var isMirroring = false
     private var frameNumber: UInt32 = 0
     private var clientHost: String?  // Connected client's IP for UDP video
+    private var useTcpVideo = false  // True when UDP video is unreachable, fallback to TCP
 
     // Loopback test components (encode → decode on Mac to compare with Android)
     private var videoDecoder: VideoDecoder?
@@ -27,10 +28,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var wasDown = false
     private var timingEnabled = false
 
-    // Frame pacing - skip frames when encoder is busy
+    // Frame pacing - drop stale frames at the capture input, keep the pipeline
+    // shallow so latency stays bounded. maxFramesInFlight > 1 lets one frame drain
+    // while the next encodes, absorbing send-tunnel jitter (fewer motion stutters).
     private var isEncodingFrame = false
     private var pendingFrame: (CVPixelBuffer, UInt64)?
     private let frameLock = NSLock()
+    private var framesSending = 0            // encoded frames handed to the socket, not yet drained
+    private let maxFramesInFlight = 2        // pipeline depth (1 = strict, higher = smoother/more latency)
+
+    /// Encode the most recently captured frame if the pipeline has spare depth.
+    /// Only the latest captured frame is kept (stale frames are dropped before
+    /// encoding), so the encoder's reference chain is never broken.
+    private func encodeNextFrameIfReady() {
+        frameLock.lock()
+        guard !isEncodingFrame,
+              framesSending < maxFramesInFlight,
+              let (buffer, ts) = pendingFrame else {
+            frameLock.unlock()
+            return
+        }
+        pendingFrame = nil
+        isEncodingFrame = true
+        frameLock.unlock()
+
+        PipelineTimer.shared.onCapture(frameNumber: frameNumber, displayTime: ts)
+        videoEncoder?.encode(pixelBuffer: buffer, timestamp: ts)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Enable "game mode" - high performance settings
@@ -150,7 +174,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let ipParts = ip.split(separator: ".")
             if ipParts.count == 4 {
                 self?.clientHost = ip
-                print("📡 Client IP for UDP video: \(ip)")
+                // A loopback client means the tablet is reaching us over adb reverse
+                // (USB mode). adb reverse only tunnels TCP, and UDP to 127.x would just
+                // loop back to this Mac, so force TCP video for loopback clients.
+                if ip == "127.0.0.1" || ip.hasPrefix("127.") {
+                    self?.useTcpVideo = true
+                    print("🔌 Loopback client (\(ip)) — forcing TCP video (USB mode)")
+                } else {
+                    print("📡 Client IP for UDP video: \(ip)")
+                }
             } else {
                 print("⚠️  Could not parse client IP from: \(address)")
                 self?.clientHost = nil
@@ -162,6 +194,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         server.onClientDisconnected = { [weak self] in
             print("❌ Client disconnected")
             self?.clientHost = nil
+            self?.useTcpVideo = false
             self?.udpVideoSender.disconnect()
             self?.updateStatusIcon(connected: false)
             self?.stopMirroring()
@@ -186,6 +219,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         server.onROIUpdate = { [weak self] roi in
             self?.handleROIUpdate(roi)
         }
+
+        server.onVideoFallback = { [weak self] in
+            guard let self = self else { return }
+            print("📡 Switching to TCP video (client reports UDP unreachable)")
+            self.useTcpVideo = true
+            self.udpVideoSender.disconnect()
+        }
     }
 
     private func handleROIUpdate(_ roi: RegionOfInterest) {
@@ -196,9 +236,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Parsec LAN: 100+ Mbps, Moonlight 4K: 80-100 Mbps, Steam 4K: 100+ Mbps
     private var requestedBitrate: Int = 80_000_000
 
+    // USB (loopback/TCP) links can't sustain the same bitrate as UDP-over-WiFi:
+    // the adb-reverse TCP tunnel bloats its send buffer above this, adding latency.
+    // USB is USB 2.0 here (~258 Mbps real throughput measured), so there's ample
+    // headroom above the video bitrate — the limiter is tunnel jitter, not bandwidth.
+    // Cap generously for quality; the in-flight pipeline handles smoothness.
+    private let usbBitrateCapMbps = 70
+
     private func handleQualityRequest(_ bitrateMbps: Int) {
-        requestedBitrate = bitrateMbps * 1_000_000
-        print("Quality request received: \(bitrateMbps) Mbps")
+        var effectiveMbps = bitrateMbps
+        if useTcpVideo {
+            effectiveMbps = min(bitrateMbps, usbBitrateCapMbps)
+        }
+        requestedBitrate = effectiveMbps * 1_000_000
+        print("Quality request received: \(bitrateMbps) Mbps (using \(effectiveMbps) Mbps)")
 
         // If already mirroring, restart with new settings
         if isMirroring {
@@ -243,8 +294,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Max 2560 width for 1440p support
         let maxWidth: CGFloat = 2560
         let scale = min(1.0, maxWidth / nativeSize.width)
-        let outputWidth = Int(nativeSize.width * scale)
-        let outputHeight = Int(nativeSize.height * scale)
+        // HEVC/H.264 require even dimensions. Scaled display modes (e.g. the 16"
+        // MBP's 1728x1117) can yield an odd height, which makes VideoToolbox fail
+        // every frame with kVTPixelTransferNotSupportedErr (-12905). Round down to even.
+        let outputWidth = Int(nativeSize.width * scale) & ~1
+        let outputHeight = Int(nativeSize.height * scale) & ~1
 
         // Initialize encoder
         let encoder = VideoEncoder()
@@ -258,44 +312,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Setup encoder callback
+        // Encoded frame ready: account for the outstanding send, hand it to the
+        // network, then try to encode the next captured frame. We never drop an
+        // already-encoded frame (that breaks the delta chain), so ordering is intact.
         encoder.onEncodedFrame = { [weak self] nalData, isKeyframe, timestamp in
             guard let self = self else { return }
-            self.sendVideoFrame(nalData: nalData, isKeyframe: isKeyframe, timestamp: timestamp)
-
-            // Frame pacing: check if there's a pending frame to encode
             self.frameLock.lock()
-            let pending = self.pendingFrame
-            self.pendingFrame = nil
-            if pending == nil {
-                self.isEncodingFrame = false
-            }
+            self.isEncodingFrame = false
+            self.framesSending += 1
             self.frameLock.unlock()
 
-            // Encode pending frame if any
-            if let (buffer, ts) = pending {
-                PipelineTimer.shared.onCapture(frameNumber: self.frameNumber, displayTime: ts)
-                self.videoEncoder?.encode(pixelBuffer: buffer, timestamp: ts)
-            }
+            self.sendVideoFrame(nalData: nalData, isKeyframe: isKeyframe, timestamp: timestamp)
+            self.encodeNextFrameIfReady()
         }
 
-        // Setup capture callback with frame pacing
+        // A frame finished draining to the socket: free a pipeline slot and refill.
+        // Allowing up to maxFramesInFlight outstanding frames absorbs adb-tunnel
+        // jitter, so a slow-to-drain motion frame no longer skips the next one.
+        server.onVideoFrameSent = { [weak self] in
+            guard let self = self else { return }
+            self.frameLock.lock()
+            self.framesSending = max(0, self.framesSending - 1)
+            self.frameLock.unlock()
+            self.encodeNextFrameIfReady()
+        }
+
+        // Newest captured frame always replaces any waiting frame (coalesce/drop
+        // stale at the input), then encode if the pipeline has room.
         capture.onFrame = { [weak self] pixelBuffer, timestamp in
             guard let self = self else { return }
-
             self.frameLock.lock()
-            if self.isEncodingFrame {
-                // Encoder busy - store as pending (replaces previous pending)
-                self.pendingFrame = (pixelBuffer, timestamp)
-                self.frameLock.unlock()
-                return
-            }
-            self.isEncodingFrame = true
+            self.pendingFrame = (pixelBuffer, timestamp)
             self.frameLock.unlock()
-
-            // Timing: capture
-            PipelineTimer.shared.onCapture(frameNumber: self.frameNumber, displayTime: timestamp)
-            self.videoEncoder?.encode(pixelBuffer: pixelBuffer, timestamp: timestamp)
+            self.encodeNextFrameIfReady()
         }
 
         // Start capture
@@ -352,6 +401,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         frameLock.lock()
         isEncodingFrame = false
         pendingFrame = nil
+        framesSending = 0
         frameLock.unlock()
 
         print("Screen mirroring stopped")
@@ -361,8 +411,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Timing: send
         PipelineTimer.shared.onSend(frameNumber: frameNumber)
 
-        // Send via UDP for lower latency (with TCP fallback)
-        if clientHost != nil {
+        // Send via UDP for lower latency, or TCP if UDP is unreachable
+        if clientHost != nil && !useTcpVideo {
             // UDP: fragmented video packets
             udpVideoSender.sendFrame(
                 nalData: nalData,
@@ -371,7 +421,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 timestamp: timestamp
             )
         } else {
-            // TCP fallback
+            // TCP: reliable delivery (USB mode, or WiFi with UDP fallback)
             let frameType: FrameType = isKeyframe ? .keyframe : .deltaFrame
             server.sendVideoFrame(frameType: frameType, timestamp: timestamp, frameNumber: frameNumber, nalData: nalData)
         }

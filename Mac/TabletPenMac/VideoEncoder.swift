@@ -78,8 +78,10 @@ class VideoEncoder {
         self.height = height
         self.fps = fps
         self.bitrate = bitrate
-        // Keyframe every 1 second for streaming (less frequent = better compression)
-        self.keyframeInterval = UInt32(fps)
+        // Over a lossless TCP link we don't need frequent keyframes for error
+        // recovery, and each keyframe is a large burst that stalls the pipe (the
+        // 1%/5% low spikes). Keyframe every 5s instead of every 1s.
+        self.keyframeInterval = UInt32(fps * 5)
 
         // Try HEVC first (faster on Apple Silicon)
         if initializeHEVC() {
@@ -192,7 +194,7 @@ class VideoEncoder {
 
         // Keyframe interval
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: keyframeInterval as CFNumber)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 1.0 as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 5.0 as CFNumber)
 
         // NO B-frames - critical for low latency (1-in-1-out behavior)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
@@ -230,7 +232,7 @@ class VideoEncoder {
 
         // Keyframe interval - more frequent during streaming for error recovery
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: keyframeInterval as CFNumber)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 1.0 as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 5.0 as CFNumber)
 
         // No B-frames - critical for low latency
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
