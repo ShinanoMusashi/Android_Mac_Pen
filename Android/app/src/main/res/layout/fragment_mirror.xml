@@ -28,6 +28,20 @@
 
     </FrameLayout>
 
+    <!-- Transparent overlay for floating controls (keyboard now, Gaming Mode later).
+         Not clickable itself, so touches outside its children fall through to the
+         mirror below; its children (keyboard) consume touches on themselves. -->
+    <FrameLayout
+        android:id="@+id/overlayContainer"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:clickable="false"
+        android:focusable="false"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
     <!-- Collapsed Connection Bar (shown when connected) -->
     <LinearLayout
         android:id="@+id/collapsedBar"
@@ -359,6 +373,19 @@
             android:background="@drawable/tool_button_normal"
             android:src="@android:drawable/ic_menu_view"
             android:contentDescription="View Only"
+            android:scaleType="centerInside"
+            android:padding="10dp"
+            app:tint="#AAAAAA" />
+
+        <!-- Keyboard toggle -->
+        <ImageButton
+            android:id="@+id/toolKeyboard"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginTop="4dp"
+            android:background="@drawable/tool_button_normal"
+            android:src="@android:drawable/ic_menu_edit"
+            android:contentDescription="Keyboard"
             android:scaleType="centerInside"
             android:padding="10dp"
             app:tint="#AAAAAA" />

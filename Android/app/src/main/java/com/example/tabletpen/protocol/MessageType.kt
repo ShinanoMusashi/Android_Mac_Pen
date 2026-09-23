@@ -13,6 +13,9 @@ enum class MessageType(val value: Byte) {
     QUALITY_REQUEST(0x04),  // Request quality preset (bitrate in Mbps as payload)
     ROI_UPDATE(0x05),       // Region of interest for zoomed streaming
     LOG_DATA(0x06),         // Log file transfer from Android to Mac
+    KEY_EVENT(0x07),        // Keyboard key down/up: [keyCode:2 BE][isDown:1][modifiers:1]
+    TEXT_INPUT(0x08),       // Typed text (UTF-8 string) to inject as unicode
+    SCROLL_EVENT(0x09),     // Scroll wheel: [dx:4 float BE][dy:4 float BE]
 
     // Mac -> Android
     MODE_ACK(0x03),

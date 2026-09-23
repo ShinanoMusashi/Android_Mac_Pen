@@ -22,6 +22,7 @@ import com.example.tabletpen.mirror.MirrorClient
 import com.example.tabletpen.mirror.PerformanceStats
 import com.example.tabletpen.mirror.VideoDecoder
 import com.example.tabletpen.protocol.AppMode
+import com.example.tabletpen.protocol.MacKeyCodes
 import com.example.tabletpen.protocol.VideoConfig
 import com.example.tabletpen.protocol.VideoFrame
 import kotlinx.coroutines.launch
@@ -279,6 +280,11 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
             updateToolModeButtons()
         }
 
+        // Keyboard show/hide
+        binding.toolKeyboard.setOnClickListener {
+            toggleKeyboard()
+        }
+
         // Zoom controls - now just for quick zoom, pinch-to-zoom is primary
         binding.toolZoomIn.setOnClickListener {
             currentZoom = (currentZoom * 1.25f).coerceAtMost(maxZoom)
@@ -407,6 +413,44 @@ class MirrorFragment : Fragment(), SurfaceHolder.Callback {
         } else {
             button.setBackgroundResource(R.drawable.tool_button_normal)
         }
+    }
+
+    // --- Floating keyboard ---
+    // A custom keyboard that floats over the mirror (draggable + resizable) and
+    // forwards typing as TEXT_INPUT / special keys as KEY_EVENT to the Mac.
+
+    private var floatingKeyboard: FloatingKeyboardView? = null
+
+    private fun tapKey(keyCode: Int) {
+        mirrorClient.sendKeyEvent(keyCode, true)
+        mirrorClient.sendKeyEvent(keyCode, false)
+    }
+
+    private fun toggleKeyboard() {
+        if (floatingKeyboard != null) {
+            hideKeyboard()
+            return
+        }
+        val kb = FloatingKeyboardView(requireContext()).apply {
+            onText = { text -> mirrorClient.sendTextInput(text) }
+            onKey = { code -> tapKey(code) }
+            onClose = { hideKeyboard() }
+        }
+        val dm = resources.displayMetrics
+        fun dp(v: Int) = (v * dm.density).toInt()
+        val lp = FrameLayout.LayoutParams(dp(560), dp(230)).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            bottomMargin = dp(48)
+        }
+        binding.overlayContainer.addView(kb, lp)
+        floatingKeyboard = kb
+        updateToolButtonState(binding.toolKeyboard, true)
+    }
+
+    private fun hideKeyboard() {
+        floatingKeyboard?.let { binding.overlayContainer.removeView(it) }
+        floatingKeyboard = null
+        updateToolButtonState(binding.toolKeyboard, false)
     }
 
     private fun applyTransform() {

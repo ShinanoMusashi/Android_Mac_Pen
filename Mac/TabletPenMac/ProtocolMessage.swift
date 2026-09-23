@@ -11,6 +11,9 @@ enum MessageType: UInt8 {
     case qualityRequest = 0x04  // Request quality/bitrate settings
     case roiUpdate = 0x05       // Region of interest update for zoomed streaming
     case logData = 0x06         // Log file transfer from Android to Mac
+    case keyEvent = 0x07        // Keyboard key down/up: [keyCode:2 BE][isDown:1][modifiers:1]
+    case textInput = 0x08       // Typed text (UTF-8) to inject as unicode
+    case scrollEvent = 0x09     // Scroll wheel: [dx:4 float BE][dy:4 float BE]
 
     // Mac -> Android
     case modeAck = 0x03
@@ -56,6 +59,24 @@ struct RegionOfInterest {
     var isFullScreen: Bool {
         return x <= 0.001 && y <= 0.001 && width >= 0.999 && height >= 0.999
     }
+}
+
+/// A keyboard key event from the tablet. `keyCode` is a macOS virtual keycode.
+struct KeyEventData {
+    let keyCode: UInt16
+    let isDown: Bool
+    let modifiers: UInt8   // bit0=Shift, bit1=Control, bit2=Option, bit3=Command
+
+    static let modShift: UInt8 = 0x01
+    static let modControl: UInt8 = 0x02
+    static let modOption: UInt8 = 0x04
+    static let modCommand: UInt8 = 0x08
+}
+
+/// A scroll wheel delta from the tablet (positive dy = scroll up).
+struct ScrollDelta {
+    let dx: Float
+    let dy: Float
 }
 
 /// Represents a protocol message.
@@ -240,6 +261,30 @@ class ProtocolCodec {
         let height = parseFloat(at: 12)
 
         return RegionOfInterest(x: x, y: y, width: width, height: height)
+    }
+
+    /// Parse a keyboard key event from payload: [keyCode:2 BE][isDown:1][modifiers:1].
+    static func decodeKeyEvent(from payload: Data) -> KeyEventData? {
+        guard payload.count >= 4 else { return nil }
+        let bytes = Array(payload.prefix(4))
+        let keyCode = UInt16(bytes[0]) << 8 | UInt16(bytes[1])
+        return KeyEventData(keyCode: keyCode, isDown: bytes[2] != 0, modifiers: bytes[3])
+    }
+
+    /// Parse typed text (UTF-8) from payload.
+    static func decodeTextInput(from payload: Data) -> String? {
+        return String(data: payload, encoding: .utf8)
+    }
+
+    /// Parse a scroll event from payload: [dx:4 float BE][dy:4 float BE].
+    static func decodeScroll(from payload: Data) -> ScrollDelta? {
+        guard payload.count >= 8 else { return nil }
+        let bytes = Array(payload.prefix(8))
+        func parseFloat(at o: Int) -> Float {
+            let bits = UInt32(bytes[o]) << 24 | UInt32(bytes[o+1]) << 16 | UInt32(bytes[o+2]) << 8 | UInt32(bytes[o+3])
+            return Float(bitPattern: bits)
+        }
+        return ScrollDelta(dx: parseFloat(at: 0), dy: parseFloat(at: 4))
     }
 
     /// Parse sync request from payload.

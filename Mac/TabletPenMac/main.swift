@@ -9,6 +9,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var udpPenReceiver: UDPPenReceiver!  // Low-latency UDP for pen data
     private var udpVideoSender: UDPVideoSender!  // Low-latency UDP for video frames
     private var cursorController: CursorController!
+    private let keyboardController = KeyboardController()
     private var drawingWindow: DrawingWindow?
 
     // Screen mirroring components
@@ -225,6 +226,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             print("📡 Switching to TCP video (client reports UDP unreachable)")
             self.useTcpVideo = true
             self.udpVideoSender.disconnect()
+        }
+
+        // Keyboard / text / scroll injection (Accessibility permission required).
+        server.onKeyEvent = { [weak self] key in
+            self?.keyboardController.postKey(key)
+        }
+        server.onTextInput = { [weak self] text in
+            self?.keyboardController.typeText(text)
+        }
+        server.onScroll = { [weak self] delta in
+            self?.keyboardController.scroll(delta)
         }
     }
 

@@ -39,6 +39,9 @@ class PenServer {
     var onModeRequest: ((AppMode) -> Void)?
     var onQualityRequest: ((Int) -> Void)?  // Bitrate in Mbps
     var onROIUpdate: ((RegionOfInterest) -> Void)?  // Region of interest for zoomed streaming
+    var onKeyEvent: ((KeyEventData) -> Void)?  // Keyboard key down/up
+    var onTextInput: ((String) -> Void)?       // Typed text to inject as unicode
+    var onScroll: ((ScrollDelta) -> Void)?     // Scroll wheel delta
     var onVideoFallback: (() -> Void)?  // Client requests TCP video (UDP unreachable)
 
     init(port: UInt16 = 9876) {
@@ -249,6 +252,22 @@ class PenServer {
             print("📡 Client requested TCP video fallback (UDP unreachable)")
             DispatchQueue.main.async {
                 self.onVideoFallback?()
+            }
+
+        case .keyEvent:
+            // Inject directly on the network queue for lowest latency (CGEvent is thread-safe)
+            if let key = ProtocolCodec.decodeKeyEvent(from: message.payload) {
+                self.onKeyEvent?(key)
+            }
+
+        case .textInput:
+            if let text = ProtocolCodec.decodeTextInput(from: message.payload) {
+                self.onTextInput?(text)
+            }
+
+        case .scrollEvent:
+            if let scroll = ProtocolCodec.decodeScroll(from: message.payload) {
+                self.onScroll?(scroll)
             }
 
         default:

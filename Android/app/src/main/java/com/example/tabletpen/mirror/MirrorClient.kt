@@ -4,6 +4,7 @@ import com.example.tabletpen.PenData
 import com.example.tabletpen.protocol.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.withLock
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.InetSocketAddress
@@ -38,6 +39,13 @@ class MirrorClient {
     // Note: Pen data now goes via UDP, not through this channel
     private val sendChannel = Channel<OutgoingMessage>(Channel.CONFLATED)
 
+    // Reliable, ORDERED channel for keyboard/scroll input — must never be dropped
+    // or reordered (rapid key down/up), so it can't share the conflated channel.
+    private val inputChannel = Channel<OutgoingMessage>(Channel.UNLIMITED)
+    private var inputSendJob: Job? = null
+    // Guards the shared outputStream so the two send loops never interleave frames.
+    private val writeMutex = kotlinx.coroutines.sync.Mutex()
+
     private sealed class OutgoingMessage {
         data class PenDataMsg(val data: PenData) : OutgoingMessage()  // Used for TCP fallback (USB)
         data class ModeRequestMsg(val mode: AppMode) : OutgoingMessage()
@@ -47,6 +55,9 @@ class MirrorClient {
         object PingMsg : OutgoingMessage()
         data class SyncRequestMsg(val t1: Long) : OutgoingMessage()  // Clock sync
         object VideoFallbackMsg : OutgoingMessage()  // Request TCP video
+        data class KeyEventMsg(val keyCode: Int, val isDown: Boolean, val modifiers: Int) : OutgoingMessage()
+        data class TextInputMsg(val text: String) : OutgoingMessage()
+        data class ScrollMsg(val dx: Float, val dy: Float) : OutgoingMessage()
     }
 
     @Volatile
@@ -157,6 +168,8 @@ class MirrorClient {
         receiveJob = null
         sendJob?.cancel()
         sendJob = null
+        inputSendJob?.cancel()
+        inputSendJob = null
 
         // Reset state
         useTcpVideoFallback = false
@@ -334,41 +347,44 @@ class MirrorClient {
         }
     }
 
+    /** Serialize one outgoing message to the socket. Callers hold [writeMutex]. */
+    private fun writeOutgoing(output: DataOutputStream, message: OutgoingMessage) {
+        when (message) {
+            is OutgoingMessage.PenDataMsg ->
+                ProtocolCodec.writePenData(output, message.data.serialize())
+            is OutgoingMessage.ModeRequestMsg ->
+                ProtocolCodec.writeModeRequest(output, message.mode)
+            is OutgoingMessage.QualityRequestMsg ->
+                ProtocolCodec.writeQualityRequest(output, message.bitrateMbps)
+            is OutgoingMessage.ROIUpdateMsg ->
+                ProtocolCodec.writeROIUpdate(output, message.x, message.y, message.width, message.height)
+            is OutgoingMessage.LogDataMsg ->
+                ProtocolCodec.writeLogData(output, message.filename, message.content)
+            is OutgoingMessage.PingMsg -> {
+                lastPingTime = System.currentTimeMillis()
+                ProtocolCodec.writePing(output)
+            }
+            is OutgoingMessage.SyncRequestMsg ->
+                ProtocolCodec.writeSyncRequest(output, message.t1)
+            is OutgoingMessage.VideoFallbackMsg ->
+                ProtocolCodec.writeVideoFallback(output)
+            is OutgoingMessage.KeyEventMsg ->
+                ProtocolCodec.writeKeyEvent(output, message.keyCode, message.isDown, message.modifiers)
+            is OutgoingMessage.TextInputMsg ->
+                ProtocolCodec.writeTextInput(output, message.text)
+            is OutgoingMessage.ScrollMsg ->
+                ProtocolCodec.writeScrollEvent(output, message.dx, message.dy)
+        }
+    }
+
     private fun startSendLoop() {
+        startInputSendLoop()
         sendJob = scope.launch {
             try {
                 for (message in sendChannel) {
                     if (!isConnected) break
                     val output = outputStream ?: break
-
-                    when (message) {
-                        is OutgoingMessage.PenDataMsg -> {
-                            // TCP fallback for USB (when UDP not available)
-                            ProtocolCodec.writePenData(output, message.data.serialize())
-                        }
-                        is OutgoingMessage.ModeRequestMsg -> {
-                            ProtocolCodec.writeModeRequest(output, message.mode)
-                        }
-                        is OutgoingMessage.QualityRequestMsg -> {
-                            ProtocolCodec.writeQualityRequest(output, message.bitrateMbps)
-                        }
-                        is OutgoingMessage.ROIUpdateMsg -> {
-                            ProtocolCodec.writeROIUpdate(output, message.x, message.y, message.width, message.height)
-                        }
-                        is OutgoingMessage.LogDataMsg -> {
-                            ProtocolCodec.writeLogData(output, message.filename, message.content)
-                        }
-                        is OutgoingMessage.PingMsg -> {
-                            lastPingTime = System.currentTimeMillis()
-                            ProtocolCodec.writePing(output)
-                        }
-                        is OutgoingMessage.SyncRequestMsg -> {
-                            ProtocolCodec.writeSyncRequest(output, message.t1)
-                        }
-                        is OutgoingMessage.VideoFallbackMsg -> {
-                            ProtocolCodec.writeVideoFallback(output)
-                        }
-                    }
+                    writeMutex.withLock { writeOutgoing(output, message) }
                 }
             } catch (e: Exception) {
                 if (isConnected) {
@@ -376,6 +392,41 @@ class MirrorClient {
                 }
             }
         }
+    }
+
+    /** Reliable, ordered loop for keyboard/scroll input (never dropped). */
+    private fun startInputSendLoop() {
+        inputSendJob = scope.launch {
+            try {
+                for (message in inputChannel) {
+                    if (!isConnected) break
+                    val output = outputStream ?: break
+                    writeMutex.withLock { writeOutgoing(output, message) }
+                }
+            } catch (e: Exception) {
+                if (isConnected) {
+                    handleDisconnect("Input send error: ${e.message}")
+                }
+            }
+        }
+    }
+
+    // --- Public input API (keyboard / scroll) ---
+
+    /** Send a key down/up. keyCode is a macOS virtual keycode (see MacKeyCodes). */
+    fun sendKeyEvent(keyCode: Int, isDown: Boolean, modifiers: Int = 0) {
+        inputChannel.trySend(OutgoingMessage.KeyEventMsg(keyCode, isDown, modifiers))
+    }
+
+    /** Send typed text to be injected as unicode on the Mac. */
+    fun sendTextInput(text: String) {
+        if (text.isEmpty()) return
+        inputChannel.trySend(OutgoingMessage.TextInputMsg(text))
+    }
+
+    /** Send a scroll wheel delta (positive dy = scroll up). */
+    fun sendScroll(dx: Float, dy: Float) {
+        inputChannel.trySend(OutgoingMessage.ScrollMsg(dx, dy))
     }
 
     private fun startReceiveLoop() {

@@ -116,6 +116,39 @@ object ProtocolCodec {
     }
 
     /**
+     * Write a keyboard key event.
+     * @param keyCode macOS virtual keycode (see MacKeyCodes)
+     * @param isDown true = key pressed, false = released
+     * @param modifiers bitmask of held modifiers (see MacKeyCodes.MOD_*)
+     */
+    fun writeKeyEvent(output: DataOutputStream, keyCode: Int, isDown: Boolean, modifiers: Int) {
+        val payload = ByteArray(4)
+        val buffer = ByteBuffer.wrap(payload)
+        buffer.putShort(keyCode.toShort())
+        buffer.put(if (isDown) 1 else 0)
+        buffer.put(modifiers.toByte())
+        writeMessage(output, MessageType.KEY_EVENT, payload)
+    }
+
+    /**
+     * Write typed text to inject as unicode on the Mac.
+     */
+    fun writeTextInput(output: DataOutputStream, text: String) {
+        writeMessage(output, MessageType.TEXT_INPUT, text.toByteArray(Charsets.UTF_8))
+    }
+
+    /**
+     * Write a scroll wheel event. Deltas are in scroll units (positive dy = scroll up).
+     */
+    fun writeScrollEvent(output: DataOutputStream, dx: Float, dy: Float) {
+        val payload = ByteArray(8)
+        val buffer = ByteBuffer.wrap(payload)
+        buffer.putFloat(dx)
+        buffer.putFloat(dy)
+        writeMessage(output, MessageType.SCROLL_EVENT, payload)
+    }
+
+    /**
      * Write log data message.
      * Format: filename + newline + file content
      */
